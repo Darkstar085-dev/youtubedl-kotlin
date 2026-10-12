@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-manual
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Validate bundled yt-dlp asset
+        run: |
+          python3 - <<'PY'
+          import zipfile
+          from pathlib import Path
+
+          asset = Path("library/src/main/res/raw/ytdlp")
+          with asset.open("rb") as stream:
+              shebang = stream.readline().rstrip(bytes((13, 10)))
+          if not shebang.startswith(b"#!"):
+              raise SystemExit(f"yt-dlp asset is missing its shebang: {shebang!r}")
+
+          with zipfile.ZipFile(asset) as archive:
+              names = set(archive.namelist())
+              # The official standalone zipapp has a root entrypoint; the package itself exposes __init__.py.
+              required = {"__main__.py", "yt_dlp/__init__.py"}
+              missing = required - names
+              if missing:
+                  sample = sorted(name for name in names if name.startswith("yt_dlp/"))[:20]
+                  raise SystemExit(f"yt-dlp archive is missing {sorted(missing)}; package entries: {sample}")
+              corrupt = archive.testzip()
+              if corrupt:
+                  raise SystemExit(f"yt-dlp archive has a corrupt entry: {corrupt}")
+
+          print(f"Validated {asset} ({asset.stat().st_size} bytes, {len(names)} ZIP entries)")
+          print(f"Python zipapp shebang: {shebang.decode('utf-8', errors='replace')}")
+          PY
+
+      - name: Run unit tests
+        run: >-
+          ./gradlew --no-daemon
+          :library:testDebugUnitTest
+          :demo:testDebugUnitTest
+
+      - name: Build library modules and demo app
+        run: >-
+          ./gradlew --no-daemon
+          :library:assembleRelease
+          :demo:assembleDebug
+
+      - name: Name demo APK with app version and commit SHA
+        id: demo-apk
+        run: |
+          apk="demo/build/outputs/apk/debug/demo-debug.apk"
+          version_name="$(sed -nE 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' demo/build.gradle.kts | head -n1)"
+          test -n "$version_name"
+          test -s "$apk"
+
+          runtime="/tmp/libpython-arm64-v8a.zip.so"
+          unzip -p "$apk" "lib/arm64-v8a/libpython.zip.so" > "$runtime"
+          test -s "$runtime"
+          rm "$runtime"
+
+          named_apk="demo/build/outputs/apk/debug/youtubedl-kotlin-demo_${version_name}_${GITHUB_SHA:0:7}.apk"
+          mv "$apk" "$named_apk"
+          echo "path=$named_apk" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename "$named_apk")" >> "$GITHUB_OUTPUT"
+
+      - name: Install Telegram upload dependency
+        run: python3 -m pip install --disable-pip-version-check telethon
+
+      - name: Send demo APK to Telegram
+        env:
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python3 .github/scripts/telegram.py "${{ steps.demo-apk.outputs.path }}"
