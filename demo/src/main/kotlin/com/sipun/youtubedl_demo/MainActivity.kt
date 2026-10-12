@@ -22,8 +22,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -49,6 +51,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -158,7 +161,7 @@ class MainActivity : ComponentActivity() {
                                         RegexOption.IGNORE_CASE
                                     )
                                     val downloadedFiles =
-                                        staging!!.listFiles()?.filter { it.isFile }.orEmpty()
+                                        staging.listFiles()?.filter { it.isFile }.orEmpty()
                                     if (downloadedFiles.any { splitStreamPattern.matches(it.name) }) {
                                         throw IllegalStateException(
                                             "FFmpeg did not merge the selected audio and video streams. " +
@@ -166,7 +169,7 @@ class MainActivity : ComponentActivity() {
                                         )
                                     }
                                     val destination =
-                                        withContext(Dispatchers.IO) { publishDownloads(staging!!) }
+                                        withContext(Dispatchers.IO) { publishDownloads(staging) }
                                     done(destination)
                                 } catch (e: Exception) {
                                     failed(e.message ?: "Download failed")
@@ -312,145 +315,202 @@ private fun DemoScreen(
     Column(
         Modifier
             .fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 18.dp, vertical = 14.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
             Text(
-                "yt-dlp Demo",
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFFF7F4FF)
+                "▶",
+                modifier = Modifier
+                    .background(Purple, RoundedCornerShape(50))
+                    .padding(horizontal = 13.dp, vertical = 10.dp),
+                color = Color(0xFF191322),
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold
             )
-            Spacer(Modifier.weight(1f))
-            Text("⋮", fontSize = 28.sp, color = Muted)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    "yt-dlp Demo",
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFFF7F4FF)
+                )
+                Text("Powered by yt-dlp · Android demo", color = Muted, fontSize = 12.sp)
+            }
+            Text("⋮", fontSize = 26.sp, color = Muted)
         }
+
         Card(
             colors = CardDefaults.cardColors(containerColor = Panel),
-            shape = RoundedCornerShape(18.dp),
+            shape = RoundedCornerShape(22.dp),
             border = androidx.compose.foundation.BorderStroke(1.dp, PanelBorder)
         ) {
-            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("VIDEO URL", fontSize = 12.sp, color = Muted)
+            Column(
+                Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text("↗  VIDEO URL", fontSize = 13.sp, color = Purple, fontWeight = FontWeight.Bold)
                 OutlinedTextField(
-                    value = url, onValueChange = { url = it; savedTo = null },
+                    value = url,
+                    onValueChange = { url = it; savedTo = null },
                     modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("Paste video link here", color = Muted) },
-                    singleLine = true, enabled = ready && !busy,
-                    shape = RoundedCornerShape(12.dp),
+                    placeholder = { Text("Paste a video link here", color = Muted) },
+                    singleLine = true,
+                    enabled = ready && !busy,
+                    shape = RoundedCornerShape(15.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Purple, unfocusedBorderColor = Color(0xFF565866),
-                        focusedTextColor = Color.White, unfocusedTextColor = Color.White,
+                        focusedBorderColor = Purple,
+                        unfocusedBorderColor = Color(0xFF454856),
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White,
                         cursorColor = Purple
                     )
                 )
-                Button(
-                    onClick = {
-                        busy = true; status = "Fetching video information…"; info =
-                        null; selectedId = null; savedTo = null
-                        onInfo(url.trim(), { result ->
-                            info = result
-                            selectedId =
-                                result.formats.orEmpty().firstOrNull { it.height == 720 }?.formatId
-                                    ?: result.formats.orEmpty().filter { it.height > 0 }
-                                        .maxByOrNull { it.height }?.formatId
-                            status = "Video information loaded"; busy = false
-                        }, { status = "Metadata failed: $it"; busy = false })
-                    },
-                    enabled = ready && !busy && url.trim().startsWith("http"),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(48.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Purple,
-                        contentColor = Color(0xFF181321)
-                    ),
-                    shape = RoundedCornerShape(30.dp)
-                ) { Text("⌕    Get Info", fontWeight = FontWeight.Bold) }
-                Button(
-                    onClick = {
-                        busy = true; status = "Downloading…"; progress = 0f; logLine = ""; savedTo =
-                        null
-                        val selected =
-                            choices.firstOrNull { it.format.formatId == selectedId }?.format
-                        onDownload(url.trim(), selected, { value, remaining, line ->
-                            progress = (value / 100f).coerceIn(0f, 1f); eta = remaining; logLine =
-                            line.take(300)
-                        }, { path ->
-                            progress = 1f; savedTo = path; status = "Download completed"; busy =
-                            false
-                        }, { status = "Download failed: $it"; busy = false })
-                    },
-                    enabled = ready && !busy && info != null,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(48.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (ready && !busy && info != null) Purple else Color(
-                            0xFF343540
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Button(
+                        onClick = {
+                            busy = true
+                            status = "Fetching video information…"
+                            info = null
+                            selectedId = null
+                            savedTo = null
+                            onInfo(url.trim(), { result ->
+                                info = result
+                                selectedId =
+                                    result.formats.orEmpty()
+                                        .firstOrNull { it.height == 720 }?.formatId
+                                        ?: result.formats.orEmpty().filter { it.height > 0 }
+                                            .maxByOrNull { it.height }?.formatId
+                                status = "Video information loaded"
+                                busy = false
+                            }, { status = "Metadata failed: $it"; busy = false })
+                        },
+                        enabled = ready && !busy && url.trim().startsWith("http"),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(50.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF302A4A),
+                            contentColor = Purple,
+                            disabledContainerColor = Color(0xFF292A34),
+                            disabledContentColor = Color(0xFF777988)
                         ),
-                        contentColor = if (ready && !busy && info != null) Color(0xFF181321) else Color(
-                            0xFF858695
-                        )
-                    ),
-                    shape = RoundedCornerShape(30.dp)
-                ) { Text("⬇    Download", fontWeight = FontWeight.Bold) }
+                        shape = RoundedCornerShape(28.dp)
+                    ) { Text("⌕  Get Info", fontWeight = FontWeight.Bold) }
+
+                    Button(
+                        onClick = {
+                            busy = true
+                            status = "Downloading…"
+                            progress = 0f
+                            logLine = ""
+                            savedTo = null
+                            val selected =
+                                choices.firstOrNull { it.format.formatId == selectedId }?.format
+                            onDownload(url.trim(), selected, { value, remaining, line ->
+                                progress = (value / 100f).coerceIn(0f, 1f)
+                                eta = remaining
+                                logLine = line.take(300)
+                            }, { path ->
+                                progress = 1f
+                                savedTo = path
+                                status = "Download completed"
+                                busy = false
+                            }, { status = "Download failed: $it"; busy = false })
+                        },
+                        enabled = ready && !busy && info != null,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(50.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Purple,
+                            contentColor = Color(0xFF191322),
+                            disabledContainerColor = Color(0xFF343540),
+                            disabledContentColor = Color(0xFF858695)
+                        ),
+                        shape = RoundedCornerShape(28.dp)
+                    ) { Text("⬇  Download", fontWeight = FontWeight.Bold) }
+                }
             }
         }
 
         if (busy) {
             Row(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Panel, RoundedCornerShape(14.dp))
+                    .padding(14.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                CircularProgressIndicator(Modifier.size(22.dp), color = Purple, strokeWidth = 2.dp)
+                CircularProgressIndicator(Modifier.size(20.dp), color = Purple, strokeWidth = 2.dp)
                 Text(status, color = Muted, fontSize = 13.sp)
             }
         } else if (info == null || savedTo == null) {
             Text(
                 status,
-                color = if (status.startsWith("Initialization failed") || status.contains("failed")) Color(
-                    0xFFFF9292
-                ) else Muted,
-                fontSize = 13.sp
+                color = if (status.startsWith("Initialization failed") || status.contains("failed"))
+                    Color(0xFFFF9292) else Muted,
+                fontSize = 13.sp,
+                modifier = Modifier.padding(horizontal = 4.dp)
             )
         }
 
         info?.let { video ->
             Card(
                 colors = CardDefaults.cardColors(containerColor = Panel),
-                shape = RoundedCornerShape(18.dp),
+                shape = RoundedCornerShape(22.dp),
                 border = androidx.compose.foundation.BorderStroke(1.dp, PanelBorder)
             ) {
-                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(
-                        "VIDEO INFORMATION",
-                        fontSize = 12.sp,
-                        color = Purple,
-                        fontWeight = FontWeight.Bold
-                    )
+                Column(
+                    Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(9.dp)
+                    ) {
+                        Text("▶", color = Purple, fontSize = 15.sp)
+                        Text(
+                            "VIDEO INFORMATION",
+                            fontSize = 13.sp,
+                            color = Purple,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         verticalAlignment = Alignment.Top
                     ) {
                         AsyncImage(
-                            model = video.thumbnail, contentDescription = "Video thumbnail",
+                            model = video.thumbnail,
+                            contentDescription = "Video thumbnail",
                             modifier = Modifier
-                                .size(width = 118.dp, height = 88.dp)
-                                .clip(RoundedCornerShape(10.dp))
+                                .size(width = 112.dp, height = 88.dp)
+                                .clip(RoundedCornerShape(12.dp))
                                 .background(Color(0xFF292B36)),
                             contentScale = ContentScale.Crop
                         )
                         Column(
                             Modifier.weight(1f),
-                            verticalArrangement = Arrangement.spacedBy(5.dp)
+                            verticalArrangement = Arrangement.spacedBy(7.dp)
                         ) {
                             Text(
                                 video.title ?: video.fulltitle ?: "Video",
                                 color = Color.White,
                                 fontWeight = FontWeight.SemiBold,
-                                fontSize = 15.sp
+                                fontSize = 15.sp,
+                                lineHeight = 20.sp
                             )
                             Text(
                                 "♟  ${video.uploader ?: video.extractor ?: "Unknown creator"}",
@@ -462,24 +522,33 @@ private fun DemoScreen(
                                 color = Muted,
                                 fontSize = 12.sp
                             )
-                            if (!video.viewCount.isNullOrBlank()) Text(
-                                "◉  ${video.viewCount} views",
-                                color = Muted,
-                                fontSize = 12.sp
-                            )
+                            if (!video.viewCount.isNullOrBlank()) {
+                                Text("◉  ${video.viewCount} views", color = Muted, fontSize = 12.sp)
+                            }
                         }
                     }
-                    Text(
-                        "AVAILABLE FORMATS",
-                        fontSize = 12.sp,
-                        color = Purple,
-                        fontWeight = FontWeight.Bold
-                    )
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text("⚙", color = Purple, fontSize = 15.sp)
+                        Text(
+                            "AVAILABLE FORMATS",
+                            fontSize = 13.sp,
+                            color = Purple,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(Modifier.weight(1f))
+                        Text("${choices.size} options", color = Muted, fontSize = 11.sp)
+                    }
+
                     if (choices.isEmpty()) {
                         Text(
-                            "Format details are unavailable; best quality will be selected automatically.",
+                            "Format details are unavailable. yt-dlp will choose the best available format automatically.",
                             color = Muted,
-                            fontSize = 12.sp
+                            fontSize = 13.sp,
+                            lineHeight = 18.sp
                         )
                     } else {
                         choices.forEach { choice ->
@@ -487,37 +556,81 @@ private fun DemoScreen(
                             Row(
                                 Modifier
                                     .fillMaxWidth()
-                                    .clip(RoundedCornerShape(12.dp))
+                                    .clip(RoundedCornerShape(16.dp))
                                     .background(
                                         if (selected) Color(0xFF29253B) else Color(
                                             0xFF20222B
                                         )
                                     )
+                                    .then(
+                                        if (selected) Modifier else Modifier
+                                    )
                                     .clickable(enabled = !busy) {
                                         selectedId = choice.format.formatId
                                     }
-                                    .padding(11.dp),
+                                    .padding(horizontal = 13.dp, vertical = 14.dp),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
                                 Text(
                                     if (selected) "◉" else "○",
                                     color = if (selected) Purple else Muted,
-                                    fontSize = 20.sp
+                                    fontSize = 21.sp
                                 )
-                                Column(Modifier.weight(1f)) {
+                                Column(
+                                    Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
                                     Text(
-                                        choice.label,
+                                        choice.label.replace(" (", " · ").replace(")", ""),
                                         color = Color.White,
                                         fontSize = 13.sp,
-                                        fontWeight = FontWeight.Medium
+                                        fontWeight = FontWeight.SemiBold
                                     )
                                     Text(choice.detail, color = Muted, fontSize = 11.sp)
                                 }
-                                Text(choice.size, color = Muted, fontSize = 11.sp)
+                                Text(
+                                    choice.size,
+                                    color = if (selected) Purple else Muted,
+                                    fontSize = 11.sp,
+                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
+                                )
                             }
                         }
                     }
+
+                    Button(
+                        onClick = {
+                            busy = true
+                            status = "Downloading…"
+                            progress = 0f
+                            logLine = ""
+                            savedTo = null
+                            val selected =
+                                choices.firstOrNull { it.format.formatId == selectedId }?.format
+                            onDownload(url.trim(), selected, { value, remaining, line ->
+                                progress = (value / 100f).coerceIn(0f, 1f)
+                                eta = remaining
+                                logLine = line.take(300)
+                            }, { path ->
+                                progress = 1f
+                                savedTo = path
+                                status = "Download completed"
+                                busy = false
+                            }, { status = "Download failed: $it"; busy = false })
+                        },
+                        enabled = ready && !busy && info != null,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(54.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Purple,
+                            contentColor = Color(0xFF191322),
+                            disabledContainerColor = Color(0xFF343540),
+                            disabledContentColor = Color(0xFF858695)
+                        ),
+                        shape = RoundedCornerShape(30.dp)
+                    ) { Text("⬇  Download Selected Format", fontWeight = FontWeight.Bold) }
                 }
             }
         }
@@ -539,13 +652,13 @@ private fun DemoScreen(
                         Text("${progress.toInt()}%", color = Color.White, fontSize = 12.sp)
                     }
                     LinearProgressIndicator(
-                        progress = progress,
+                        progress = { progress },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(7.dp)
                             .clip(RoundedCornerShape(8.dp)),
                         color = Purple,
-                        trackColor = Color(0xFF393B49)
+                        trackColor = Color(0xFF393B49),
                     )
                     Row(Modifier.fillMaxWidth()) {
                         Text(
@@ -588,14 +701,14 @@ private fun DemoScreen(
                         fontSize = 16.sp
                     )
                     LinearProgressIndicator(
-                    progress = { 1f },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(7.dp)
-                                                .clip(RoundedCornerShape(8.dp)),
-                    color = Purple,
-                    trackColor = Color(0xFF393B49),
-                    strokeCap = COMPILED_CODE,
+                        progress = { 1f },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(7.dp)
+                            .clip(RoundedCornerShape(8.dp)),
+                        color = Purple,
+                        trackColor = Color(0xFF393B49),
+                        strokeCap = StrokeCap.Round,
                     )
                     Text("File saved to:", color = Muted, fontSize = 12.sp)
                     Text("$path", color = Color.White, fontSize = 13.sp)
