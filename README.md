@@ -112,8 +112,8 @@ Run these commands from the repository root:
 ## Bundled binary sizes
 
 Sizes below are the current on-disk sizes of the bundled runtime files in this repository. They are
-not the compressed download size of a Git clone. Values are generated from the tracked files when
-the **Update Runtimes** workflow is manually dispatched.
+not the compressed download size of a Git clone. The full file-by-file byte counts are maintained in
+[runtime-sizes.tsv](runtime-sizes.tsv).
 
 <!-- RUNTIME-SIZES:START -->
 
@@ -130,8 +130,6 @@ the **Update Runtimes** workflow is manually dispatched.
 | arm64-v8a | ffprobe                | 193,584 bytes |
 
 <!-- RUNTIME-SIZES:END -->
-
-The full file-by-file byte counts are maintained in [runtime-sizes.tsv](runtime-sizes.tsv).
 
 ## Project background and changes
 
