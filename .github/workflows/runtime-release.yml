@@ -74,7 +74,15 @@ jobs:
           tag="runtime-v1"
           version="${{ steps.package.outputs.version }}"
           zip_path="${{ steps.package.outputs.zip }}"
-          notes="Python v$version: ${{ steps.package.outputs.python_size }} · FFmpeg v$version: ${{ steps.package.outputs.ffmpeg_size }} · aria2 v$version: ${{ steps.package.outputs.aria2_size }} · Total ZIP: ${{ steps.package.outputs.bundle_size }}"
+          notes="$(cat <<EOF
+          | Library | Version | Size |
+          |---|---:|---:|
+          | Python runtime | v$version | ${{ steps.package.outputs.python_size }} |
+          | FFmpeg / FFprobe runtime | v$version | ${{ steps.package.outputs.ffmpeg_size }} |
+          | aria2 runtime | v$version | ${{ steps.package.outputs.aria2_size }} |
+          | **Total ZIP** | **v$version** | **${{ steps.package.outputs.bundle_size }}** |
+          EOF
+          )"
           if gh release view "$tag" --json tagName >/dev/null 2>&1; then
             gh release edit "$tag" --title "Libraries archive v$version" --notes "$notes"
             old_assets="$(gh release view "$tag" --json assets --jq '.assets[].name | select(startswith("libraries_v") and endswith(".zip"))')"
