@@ -2,20 +2,23 @@ name: Build and publish runtime archives
 
 on:
   workflow_dispatch:
-    inputs:
-      tag:
-        description: "Release tag to update (for example runtime-v1)"
-        required: true
-        default: "runtime-v1"
   push:
-    tags:
-      - "runtime-v*"
+    branches:
+      - main
+    paths:
+      - "library/**"
+      - "ffmpeg/**"
+      - "aria2c/**"
+      - "build.gradle.kts"
+      - "gradle.properties"
+      - "settings.gradle.kts"
+      - ".github/workflows/runtime-release.yml"
 
 permissions:
   contents: write
 
 concurrency:
-  group: runtime-release-${{ github.ref }}
+  group: runtime-release
   cancel-in-progress: false
 
 jobs:
@@ -62,16 +65,10 @@ jobs:
             cd "$staging"
             sha256sum libpython.zip.so libffmpeg.zip.so libaria2c.zip.so > SHA256SUMS
           )
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            tag="${{ github.event.inputs.tag }}"
-          else
-            tag="${GITHUB_REF_NAME}"
-          fi
           zip_name="Libraries archive v${version}.zip"
           (cd "$staging" && zip -9 "$RUNNER_TEMP/$zip_name" libpython.zip.so libffmpeg.zip.so libaria2c.zip.so SHA256SUMS)
           {
             echo "version=$version"
-            echo "tag=$tag"
             echo "zip=$RUNNER_TEMP/$zip_name"
             echo "python_size=$(du -h "$staging/libpython.zip.so" | cut -f1)"
             echo "ffmpeg_size=$(du -h "$staging/libffmpeg.zip.so" | cut -f1)"
@@ -85,10 +82,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tag="${{ steps.package.outputs.tag }}"
+          tag="runtime-v1"
           version="${{ steps.package.outputs.version }}"
           zip_path="${{ steps.package.outputs.zip }}"
-          zip_name="$(basename "$zip_path")"
           notes="$(cat <<EOF
           Versioned Android runtime libraries archive for arm64-v8a.
 
@@ -99,13 +95,16 @@ jobs:
 
           **Bundle ZIP size:** ${{ steps.package.outputs.bundle_size }}
 
-          SHA256SUMS is included inside the ZIP. Checksums are verified by Downly before the runtime is installed.
+          SHA256SUMS is included inside the ZIP. Checksums are verified by Downly before the runtime is installed. The asset version is derived automatically from Gradle.
           EOF
           )"
           if gh release view "$tag" --json tagName >/dev/null 2>&1; then
             gh release edit "$tag" --title "Libraries archive v$version" --notes "$notes"
-            gh release delete-asset "$tag" "downly-runtime-arm64-$tag.zip" --yes 2>/dev/null || true
-            gh release upload "$tag" "$zip_path" --clobber
+            old_assets="$(gh release view "$tag" --json assets --jq '.assets[].name | select(startswith("Libraries archive v") and endswith(".zip"))')"
+            while IFS= read -r asset; do
+              [ -z "$asset" ] || gh release delete-asset "$tag" "$asset" --yes
+            done <<< "$old_assets"
+            gh release upload "$tag" "$zip_path"
           else
             gh release create "$tag" "$zip_path" \
               --title "Libraries archive v$version" \
