@@ -121,7 +121,7 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         },
-                        onDownload = { url, selectedFormat, progress, done, failed ->
+                        onDownload = { url, selectedFormat, audioOnly, dataBudgetMb, progress, done, failed ->
                             lifecycleScope.launch {
                                 var staging: File? = null
                                 try {
@@ -131,26 +131,28 @@ class MainActivity : ComponentActivity() {
                                             if (!mkdirs()) error("Could not create temporary download folder")
                                         }
                                     }
-                                    val formatOption = selectedFormat?.let { format ->
-                                        val id = format.formatId
-                                        if (id.isNullOrBlank()) "bestvideo*+bestaudio/best"
-                                        else if (format.acodec.isNullOrBlank() || format.acodec == "none") "$id+bestaudio/best"
-                                        else id
-                                    } ?: "bestvideo*+bestaudio/best"
                                     val request = YoutubeDLRequest(url)
-                                        .addOption(
-                                            "-o",
-                                            File(staging, "%(title)s.%(ext)s").absolutePath
-                                        )
-                                        .addOption("-f", formatOption)
-                                        .addOption("--merge-output-format", "mp4")
-                                        .addOption(
-                                            "--external-downloader",
-                                            File(
-                                                applicationInfo.nativeLibraryDir,
-                                                "libaria2c.so"
-                                            ).absolutePath
-                                        )
+                                        .addOption("-o", File(staging, "%(title)s.%(ext)s").absolutePath)
+                                    if (audioOnly) {
+                                        request.addOption("-f", selectedFormat?.formatId ?: "bestaudio/best")
+                                            .addOption("-x")
+                                            .addOption("--audio-format", "mp3")
+                                            .addOption("--audio-quality", "0")
+                                    } else {
+                                        val budgetBytes = dataBudgetMb * 1024L * 1024L
+                                        val formatOption = selectedFormat?.let { format ->
+                                            val id = format.formatId
+                                            if (id.isNullOrBlank()) "bestvideo*+bestaudio/best"
+                                            else if (format.acodec.isNullOrBlank() || format.acodec == "none") "$id+bestaudio/best"
+                                            else id
+                                        } ?: "bestvideo*[filesize_approx<=${budgetBytes}]+bestaudio/best[filesize_approx<=${budgetBytes}]/bestvideo*+bestaudio/best"
+                                        request.addOption("-f", formatOption)
+                                            .addOption("--merge-output-format", "mp4")
+                                    }
+                                    request.addOption(
+                                        "--external-downloader",
+                                        File(applicationInfo.nativeLibraryDir, "libaria2c.so").absolutePath
+                                    )
                                     withContext(Dispatchers.IO) {
                                         YoutubeDL.execute(request) { value, eta, line ->
                                             mainHandler.post { progress(value, eta, line) }
@@ -160,16 +162,14 @@ class MainActivity : ComponentActivity() {
                                         """.+\.f\d+\.(mp4|webm|mkv|m4a|opus|aac)$""",
                                         RegexOption.IGNORE_CASE
                                     )
-                                    val downloadedFiles =
-                                        staging.listFiles()?.filter { it.isFile }.orEmpty()
+                                    val downloadedFiles = staging.listFiles()?.filter { it.isFile }.orEmpty()
                                     if (downloadedFiles.any { splitStreamPattern.matches(it.name) }) {
-                                        throw IllegalStateException(
-                                            "FFmpeg did not merge the selected audio and video streams. " +
-                                                    "Separate streams were kept out of Downloads."
-                                        )
+                                        throw IllegalStateException("FFmpeg did not merge the selected audio and video streams.")
                                     }
-                                    val destination =
-                                        withContext(Dispatchers.IO) { publishDownloads(staging) }
+                                    if (audioOnly && downloadedFiles.none { it.extension.equals("mp3", true) }) {
+                                        throw IllegalStateException("MP3 conversion did not produce an MP3 file.")
+                                    }
+                                    val destination = withContext(Dispatchers.IO) { publishDownloads(staging) }
                                     done(destination)
                                 } catch (e: Exception) {
                                     failed(e.message ?: "Download failed")
@@ -232,11 +232,7 @@ class MainActivity : ComponentActivity() {
                     put(MediaStore.Downloads.DISPLAY_NAME, src.name)
                     put(
                         MediaStore.Downloads.MIME_TYPE,
-                        if (src.extension.equals(
-                                "mp4",
-                                true
-                            )
-                        ) "video/mp4" else "application/octet-stream"
+                        when (src.extension.lowercase(Locale.ROOT)) { "mp4" -> "video/mp4"; "mp3" -> "audio/mpeg"; "m4a" -> "audio/mp4"; else -> "application/octet-stream" }
                     )
                     put(MediaStore.Downloads.RELATIVE_PATH, relative)
                     put(MediaStore.Downloads.IS_PENDING, 1)
@@ -262,6 +258,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+
 private data class FormatChoice(
     val format: VideoFormat,
     val label: String,
@@ -273,14 +270,16 @@ private data class FormatChoice(
 private fun DemoScreen(
     onInitialize: ((() -> Unit), (String) -> Unit) -> Unit,
     onInfo: (String, (VideoInfo) -> Unit, (String) -> Unit) -> Unit,
-    onDownload: (String, VideoFormat?, (Float, Long, String) -> Unit, (String) -> Unit, (String) -> Unit) -> Unit
+    onDownload: (String, VideoFormat?, Boolean, Long, (Float, Long, String) -> Unit, (String) -> Unit, (String) -> Unit) -> Unit
 ) {
     var url by remember { mutableStateOf("") }
     var ready by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(true) }
-    var status by remember { mutableStateOf("Checking storage access and initializing yt-dlp…") }
+    var status by remember { mutableStateOf("Initializing yt-dlp…") }
     var info by remember { mutableStateOf<VideoInfo?>(null) }
     var selectedId by remember { mutableStateOf<String?>(null) }
+    var audioTab by remember { mutableStateOf(false) }
+    var dataBudgetMb by remember { mutableStateOf("150") }
     var progress by remember { mutableStateOf(0f) }
     var eta by remember { mutableStateOf(0L) }
     var logLine by remember { mutableStateOf("") }
@@ -293,32 +292,48 @@ private fun DemoScreen(
         )
     }
 
-    val choices = info?.formats.orEmpty()
-        .filter { it.formatId != null && (it.height > 0 || !it.formatNote.isNullOrBlank()) }
-        .distinctBy { it.formatId }
-        .sortedByDescending { it.height }
-        .take(12)
-        .map { f ->
-            val quality = if (f.height > 0) "${f.height}p" else f.formatNote ?: "Format"
-            val codec = f.ext?.uppercase(Locale.getDefault()) ?: "Media"
-            val type =
-                if (f.acodec.isNullOrBlank() || f.acodec == "none") "video only" else "video + audio"
-            val bytes = if (f.fileSize > 0) f.fileSize else f.fileSizeApproximate
+    val rawFormats = info?.formats.orEmpty().filter { !it.formatId.isNullOrBlank() }
+    val videoChoices = rawFormats
+        .filter { it.height > 0 && !it.vcodec.isNullOrBlank() && it.vcodec != "none" }
+        .groupBy { it.height }
+        .mapNotNull { (_, formats) ->
+            val chosen = formats.sortedWith(
+                compareByDescending<VideoFormat> { it.ext.equals("mp4", true) }
+                    .thenByDescending { !it.acodec.isNullOrBlank() && it.acodec != "none" }
+                    .thenByDescending { if (it.fileSize > 0) it.fileSize else it.fileSizeApproximate }
+            ).firstOrNull() ?: return@mapNotNull null
+            val bytes = if (chosen.fileSize > 0) chosen.fileSize else chosen.fileSizeApproximate
             FormatChoice(
-                f,
-                "$quality ($type)",
-                "$codec · ${f.width}×${f.height}",
+                chosen,
+                "${chosen.height}p",
+                "${chosen.ext?.uppercase(Locale.getDefault()) ?: "VIDEO"} · " +
+                    if (!chosen.acodec.isNullOrBlank() && chosen.acodec != "none") "Video + audio" else "Video only · audio merged automatically",
                 formatBytes(bytes)
             )
         }
+        .sortedByDescending { it.format.height }
+
+    val audioChoices = rawFormats
+        .filter { (it.vcodec.isNullOrBlank() || it.vcodec == "none") && !it.acodec.isNullOrBlank() && it.acodec != "none" }
+        .groupBy { Pair(it.abr, it.ext?.lowercase(Locale.ROOT)) }
+        .mapNotNull { (_, formats) ->
+            val chosen = formats.maxByOrNull { if (it.fileSize > 0) it.fileSize else it.fileSizeApproximate }
+                ?: return@mapNotNull null
+            val bytes = if (chosen.fileSize > 0) chosen.fileSize else chosen.fileSizeApproximate
+            FormatChoice(
+                chosen,
+                if (chosen.abr > 0) "${chosen.abr} kbps" else "Audio quality",
+                "${chosen.ext?.uppercase(Locale.getDefault()) ?: "AUDIO"} · audio only → MP3",
+                formatBytes(bytes)
+            )
+        }
+        .sortedByDescending { it.format.abr }
+
+    val choices = if (audioTab) audioChoices else videoChoices
 
     Column(
-        Modifier
-            .fillMaxSize()
-            .statusBarsPadding()
-            .navigationBarsPadding()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+        Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()
+            .verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         Row(
@@ -327,24 +342,14 @@ private fun DemoScreen(
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Text(
-                "▶",
-                modifier = Modifier
-                    .background(Purple, RoundedCornerShape(50))
-                    .padding(horizontal = 13.dp, vertical = 10.dp),
-                color = Color(0xFF191322),
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold
+                "↓",
+                modifier = Modifier.background(Purple, RoundedCornerShape(50)).padding(horizontal = 15.dp, vertical = 8.dp),
+                color = Color(0xFF191322), fontSize = 22.sp, fontWeight = FontWeight.Bold
             )
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    "yt-dlp Demo",
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color(0xFFF7F4FF)
-                )
-                Text("Powered by yt-dlp · Android demo", color = Muted, fontSize = 12.sp)
+                Text("yt-dlp Demo", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF7F4FF))
+                Text("Smart video & audio downloader", color = Muted, fontSize = 12.sp)
             }
-            Text("⋮", fontSize = 26.sp, color = Muted)
         }
 
         Card(
@@ -352,11 +357,8 @@ private fun DemoScreen(
             shape = RoundedCornerShape(22.dp),
             border = androidx.compose.foundation.BorderStroke(1.dp, PanelBorder)
         ) {
-            Column(
-                Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Text("↗  VIDEO URL", fontSize = 13.sp, color = Purple, fontWeight = FontWeight.Bold)
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("VIDEO URL", fontSize = 13.sp, color = Purple, fontWeight = FontWeight.Bold)
                 OutlinedTextField(
                     value = url,
                     onValueChange = { url = it; savedTo = null },
@@ -366,380 +368,214 @@ private fun DemoScreen(
                     enabled = ready && !busy,
                     shape = RoundedCornerShape(15.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Purple,
-                        unfocusedBorderColor = Color(0xFF454856),
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White,
-                        cursorColor = Purple
+                        focusedBorderColor = Purple, unfocusedBorderColor = Color(0xFF454856),
+                        focusedTextColor = Color.White, unfocusedTextColor = Color.White, cursorColor = Purple
                     )
                 )
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Button(
-                        onClick = {
-                            busy = true
-                            status = "Fetching video information…"
-                            info = null
+                Button(
+                    onClick = {
+                        busy = true; status = "Fetching available formats…"; info = null
+                        selectedId = null; savedTo = null
+                        onInfo(url.trim(), { result ->
+                            info = result
                             selectedId = null
-                            savedTo = null
-                            onInfo(url.trim(), { result ->
-                                info = result
-                                selectedId =
-                                    result.formats.orEmpty()
-                                        .firstOrNull { it.height == 720 }?.formatId
-                                        ?: result.formats.orEmpty().filter { it.height > 0 }
-                                            .maxByOrNull { it.height }?.formatId
-                                status = "Video information loaded"
-                                busy = false
-                            }, { status = "Metadata failed: $it"; busy = false })
-                        },
-                        enabled = ready && !busy && url.trim().startsWith("http"),
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(50.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFF302A4A),
-                            contentColor = Purple,
-                            disabledContainerColor = Color(0xFF292A34),
-                            disabledContentColor = Color(0xFF777988)
-                        ),
-                        shape = RoundedCornerShape(28.dp)
-                    ) { Text("⌕  Get Info", fontWeight = FontWeight.Bold) }
-
-                    Button(
-                        onClick = {
-                            busy = true
-                            status = "Downloading…"
-                            progress = 0f
-                            logLine = ""
-                            savedTo = null
-                            val selected =
-                                choices.firstOrNull { it.format.formatId == selectedId }?.format
-                            onDownload(url.trim(), selected, { value, remaining, line ->
-                                progress = (value / 100f).coerceIn(0f, 1f)
-                                eta = remaining
-                                logLine = line.take(300)
-                            }, { path ->
-                                progress = 1f
-                                savedTo = path
-                                status = "Download completed"
-                                busy = false
-                            }, { status = "Download failed: $it"; busy = false })
-                        },
-                        enabled = ready && !busy && info != null,
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(50.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Purple,
-                            contentColor = Color(0xFF191322),
-                            disabledContainerColor = Color(0xFF343540),
-                            disabledContentColor = Color(0xFF858695)
-                        ),
-                        shape = RoundedCornerShape(28.dp)
-                    ) { Text("⬇  Download", fontWeight = FontWeight.Bold) }
-                }
+                            status = "Formats loaded"; busy = false
+                        }, { status = "Metadata failed: $it"; busy = false })
+                    },
+                    enabled = ready && !busy && url.trim().startsWith("http"),
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF302A4A), contentColor = Purple),
+                    shape = RoundedCornerShape(28.dp)
+                ) { Text("Get video & audio options", fontWeight = FontWeight.Bold) }
             }
         }
 
-        if (busy) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .background(Panel, RoundedCornerShape(14.dp))
-                    .padding(14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                CircularProgressIndicator(Modifier.size(20.dp), color = Purple, strokeWidth = 2.dp)
-                Text(status, color = Muted, fontSize = 13.sp)
-            }
-        } else if (info == null || savedTo == null) {
-            Text(
-                status,
-                color = if (status.startsWith("Initialization failed") || status.contains("failed"))
-                    Color(0xFFFF9292) else Muted,
-                fontSize = 13.sp,
-                modifier = Modifier.padding(horizontal = 4.dp)
-            )
-        }
-
-        info?.let { video ->
-            Card(
-                colors = CardDefaults.cardColors(containerColor = Panel),
-                shape = RoundedCornerShape(22.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, PanelBorder)
-            ) {
+        Row(
+            Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(18.dp)).padding(5.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            listOf(false to "Video", true to "Audio · MP3").forEach { (isAudio, label) ->
+                val selected = audioTab == isAudio
                 Column(
-                    Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                    Modifier.weight(1f).clip(RoundedCornerShape(14.dp))
+                        .background(if (selected) Color(0xFF39304F) else Color.Transparent)
+                        .clickable(enabled = !busy) { audioTab = isAudio; selectedId = null }
+                        .padding(vertical = 13.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(9.dp)
-                    ) {
-                        Text("▶", color = Purple, fontSize = 15.sp)
-                        Text(
-                            "VIDEO INFORMATION",
-                            fontSize = 13.sp,
-                            color = Purple,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalAlignment = Alignment.Top
-                    ) {
-                        AsyncImage(
-                            model = video.thumbnail,
-                            contentDescription = "Video thumbnail",
-                            modifier = Modifier
-                                .size(width = 112.dp, height = 88.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(Color(0xFF292B36)),
-                            contentScale = ContentScale.Crop
-                        )
-                        Column(
-                            Modifier.weight(1f),
-                            verticalArrangement = Arrangement.spacedBy(7.dp)
-                        ) {
-                            Text(
-                                video.title ?: video.fulltitle ?: "Video",
-                                color = Color.White,
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 15.sp,
-                                lineHeight = 20.sp
-                            )
-                            Text(
-                                "♟  ${video.uploader ?: video.extractor ?: "Unknown creator"}",
-                                color = Muted,
-                                fontSize = 12.sp
-                            )
-                            Text(
-                                "◷  ${formatDuration(video.duration)}",
-                                color = Muted,
-                                fontSize = 12.sp
-                            )
-                            if (!video.viewCount.isNullOrBlank()) {
-                                Text("◉  ${video.viewCount} views", color = Muted, fontSize = 12.sp)
-                            }
-                        }
-                    }
-
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text("⚙", color = Purple, fontSize = 15.sp)
-                        Text(
-                            "AVAILABLE FORMATS",
-                            fontSize = 13.sp,
-                            color = Purple,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(Modifier.weight(1f))
-                        Text("${choices.size} options", color = Muted, fontSize = 11.sp)
-                    }
-
-                    if (choices.isEmpty()) {
-                        Text(
-                            "Format details are unavailable. yt-dlp will choose the best available format automatically.",
-                            color = Muted,
-                            fontSize = 13.sp,
-                            lineHeight = 18.sp
-                        )
-                    } else {
-                        choices.forEach { choice ->
-                            val selected = selectedId == choice.format.formatId
-                            Row(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(16.dp))
-                                    .background(
-                                        if (selected) Color(0xFF29253B) else Color(
-                                            0xFF20222B
-                                        )
-                                    )
-                                    .then(
-                                        if (selected) Modifier else Modifier
-                                    )
-                                    .clickable(enabled = !busy) {
-                                        selectedId = choice.format.formatId
-                                    }
-                                    .padding(horizontal = 13.dp, vertical = 14.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
-                                Text(
-                                    if (selected) "◉" else "○",
-                                    color = if (selected) Purple else Muted,
-                                    fontSize = 21.sp
-                                )
-                                Column(
-                                    Modifier.weight(1f),
-                                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                                ) {
-                                    Text(
-                                        choice.label.replace(" (", " · ").replace(")", ""),
-                                        color = Color.White,
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                    Text(choice.detail, color = Muted, fontSize = 11.sp)
-                                }
-                                Text(
-                                    choice.size,
-                                    color = if (selected) Purple else Muted,
-                                    fontSize = 11.sp,
-                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
-                                )
-                            }
-                        }
-                    }
-
-                    Button(
-                        onClick = {
-                            busy = true
-                            status = "Downloading…"
-                            progress = 0f
-                            logLine = ""
-                            savedTo = null
-                            val selected =
-                                choices.firstOrNull { it.format.formatId == selectedId }?.format
-                            onDownload(url.trim(), selected, { value, remaining, line ->
-                                progress = (value / 100f).coerceIn(0f, 1f)
-                                eta = remaining
-                                logLine = line.take(300)
-                            }, { path ->
-                                progress = 1f
-                                savedTo = path
-                                status = "Download completed"
-                                busy = false
-                            }, { status = "Download failed: $it"; busy = false })
-                        },
-                        enabled = ready && !busy && info != null,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(54.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Purple,
-                            contentColor = Color(0xFF191322),
-                            disabledContainerColor = Color(0xFF343540),
-                            disabledContentColor = Color(0xFF858695)
-                        ),
-                        shape = RoundedCornerShape(30.dp)
-                    ) { Text("⬇  Download Selected Format", fontWeight = FontWeight.Bold) }
+                    Text(label, color = if (selected) Purple else Muted, fontWeight = FontWeight.SemiBold)
                 }
             }
         }
 
-        if (progress > 0f && savedTo == null) {
+        if (!audioTab) {
             Card(
                 colors = CardDefaults.cardColors(containerColor = Panel),
                 shape = RoundedCornerShape(18.dp),
                 border = androidx.compose.foundation.BorderStroke(1.dp, PanelBorder)
             ) {
-                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            "⬇  Downloading…",
-                            color = Color.White,
-                            fontWeight = FontWeight.SemiBold
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("SMART DATA DOWNLOAD", color = Purple, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    Text("Choose the largest suitable quality using estimated size. The budget is a target, not a guaranteed cap when source sizes are unknown.", color = Muted, fontSize = 12.sp, lineHeight = 17.sp)
+                    OutlinedTextField(
+                        value = dataBudgetMb,
+                        onValueChange = { value -> dataBudgetMb = value.filter(Char::isDigit).take(5) },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Preferred data budget (MB)") },
+                        singleLine = true,
+                        enabled = !busy,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Purple, unfocusedBorderColor = Color(0xFF454856),
+                            focusedTextColor = Color.White, unfocusedTextColor = Color.White
                         )
+                    )
+                }
+            }
+        } else {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Panel),
+                shape = RoundedCornerShape(18.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, PanelBorder)
+            ) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("AUDIO ONLY", color = Purple, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    Text("Only the audio stream is downloaded, then converted to MP3 automatically. Conversion may increase or reduce file size; it cannot improve the original audio quality.", color = Muted, fontSize = 12.sp, lineHeight = 17.sp)
+                }
+            }
+        }
+
+        if (info != null) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(if (audioTab) "AUDIO VARIANTS" else "VIDEO QUALITIES", color = Purple, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                Spacer(Modifier.weight(1f))
+                Text("${choices.size} options", color = Muted, fontSize = 12.sp)
+            }
+
+            if (!audioTab) {
+                val selected = selectedId == null
+                FormatRow(
+                    title = "Smart · Auto select",
+                    detail = "Prefer the highest quality within your budget",
+                    size = "Recommended",
+                    selected = selected,
+                    enabled = !busy,
+                    onClick = { selectedId = null }
+                )
+            }
+
+            if (choices.isEmpty()) {
+                Text(
+                    if (audioTab) "No separate audio variants were reported. Try Auto download to let yt-dlp choose an available audio stream."
+                    else "No video variants were reported. Smart Auto download can still ask yt-dlp for the best available video.",
+                    color = Muted, fontSize = 13.sp, lineHeight = 18.sp
+                )
+            } else {
+                choices.forEach { choice ->
+                    val selected = selectedId == choice.format.formatId
+                    FormatRow(
+                        title = choice.label,
+                        detail = choice.detail,
+                        size = choice.size,
+                        selected = selected,
+                        enabled = !busy,
+                        onClick = { selectedId = choice.format.formatId }
+                    )
+                }
+            }
+
+            Button(
+                onClick = {
+                    busy = true
+                    status = if (audioTab) "Downloading audio and converting to MP3…" else "Downloading video…"
+                    progress = 0f; logLine = ""; savedTo = null
+                    val selected = choices.firstOrNull { it.format.formatId == selectedId }?.format
+                    onDownload(url.trim(), selected, audioTab, (dataBudgetMb.toLongOrNull() ?: 150L).coerceIn(1L, 100000L), { value, remaining, line ->
+                        progress = (value / 100f).coerceIn(0f, 1f)
+                        eta = remaining; logLine = line.take(300)
+                    }, { path ->
+                        progress = 1f; savedTo = path; status = "Download completed"; busy = false
+                    }, { status = "Download failed: $it"; busy = false })
+                },
+                enabled = ready && !busy && info != null,
+                modifier = Modifier.fillMaxWidth().height(54.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Purple, contentColor = Color(0xFF191322),
+                    disabledContainerColor = Color(0xFF343540), disabledContentColor = Color(0xFF858695)
+                ),
+                shape = RoundedCornerShape(30.dp)
+            ) {
+                Text(if (audioTab) "Download MP3" else if (selectedId == null) "Smart Download" else "Download selected quality", fontWeight = FontWeight.Bold)
+            }
+        }
+
+        if (busy && !ready) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Purple, strokeWidth = 2.dp)
+                Text(status, color = Muted, fontSize = 12.sp)
+            }
+        } else if (status.contains("failed", ignoreCase = true) || status.contains("error", ignoreCase = true)) {
+            Text(status, color = Color(0xFFFF9D9D), fontSize = 12.sp)
+        }
+
+        if (progress > 0f && savedTo == null) {
+            Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(18.dp)) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(status, color = Color.White, fontWeight = FontWeight.SemiBold)
                         Spacer(Modifier.weight(1f))
                         Text("${progress.toInt()}%", color = Color.White, fontSize = 12.sp)
                     }
                     LinearProgressIndicator(
-                        progress = { progress },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(7.dp)
-                            .clip(RoundedCornerShape(8.dp)),
-                        color = Purple,
-                        trackColor = Color(0xFF393B49),
+                        progress = { progress }, modifier = Modifier.fillMaxWidth().height(7.dp).clip(RoundedCornerShape(8.dp)),
+                        color = Purple, trackColor = Color(0xFF393B49)
                     )
-                    Row(Modifier.fillMaxWidth()) {
-                        Text(
-                            if (eta > 0) "ETA ${eta}s" else "Working…",
-                            color = Muted,
-                            fontSize = 12.sp
-                        )
-                        Spacer(Modifier.weight(1f))
-                        Text("yt-dlp runtime", color = Muted, fontSize = 12.sp)
-                    }
-                    if (logLine.isNotBlank()) {
-                        Text(
-                            logLine,
-                            color = Muted,
-                            fontSize = 11.sp,
-                            lineHeight = 16.sp,
-                            modifier = Modifier
-                                .background(
-                                    Color(0xFF13141B),
-                                    RoundedCornerShape(10.dp)
-                                )
-                                .padding(10.dp)
-                        )
-                    }
+                    Text(if (eta > 0) "ETA ${eta}s" else "Working…", color = Muted, fontSize = 12.sp)
+                    if (logLine.isNotBlank()) Text(logLine, color = Muted, fontSize = 11.sp)
                 }
             }
         }
 
         savedTo?.let { path ->
-            Card(
-                colors = CardDefaults.cardColors(containerColor = Panel),
-                shape = RoundedCornerShape(18.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, PanelBorder)
-            ) {
-                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(
-                        "✓  Download Completed",
-                        color = Green,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp
-                    )
-                    LinearProgressIndicator(
-                        progress = { 1f },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(7.dp)
-                            .clip(RoundedCornerShape(8.dp)),
-                        color = Purple,
-                        trackColor = Color(0xFF393B49),
-                        strokeCap = StrokeCap.Round,
-                    )
-                    Text("File saved to:", color = Muted, fontSize = 12.sp)
-                    Text("$path", color = Color.White, fontSize = 13.sp)
-                    Text(
-                        "Open your device's Downloads app to find the file.",
-                        color = Muted,
-                        fontSize = 12.sp
-                    )
+            Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(18.dp)) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Download completed", color = Green, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text("Saved to: $path", color = Color.White, fontSize = 13.sp)
                     Button(
-                        onClick = {
-                            url = ""; info = null; selectedId = null; savedTo = null; progress =
-                            0f; status = "Ready to test"
-                        },
+                        onClick = { url = ""; info = null; selectedId = null; savedTo = null; progress = 0f; status = "Ready to test" },
                         modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Purple,
-                            contentColor = Color(0xFF181321)
-                        ),
+                        colors = ButtonDefaults.buttonColors(containerColor = Purple, contentColor = Color(0xFF181321)),
                         shape = RoundedCornerShape(28.dp)
-                    ) {
-                        Text("↻    Download Another")
-                    }
+                    ) { Text("Download another") }
                 }
             }
         }
+        Text("Saved to Downloads/yt-dlp Demo. File-size estimates depend on source metadata.", color = Color(0xFF898B9A), fontSize = 11.sp)
+    }
+}
 
-        Text(
-            "Files are saved to Downloads/yt-dlp Demo. Android 10+ uses scoped storage.",
-            color = Color(0xFF898B9A),
-            fontSize = 11.sp
-        )
+@Composable
+private fun FormatRow(
+    title: String,
+    detail: String,
+    size: String,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
+            .background(if (selected) Color(0xFF29253B) else Color(0xFF20222B))
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 13.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(if (selected) "◉" else "○", color = if (selected) Purple else Muted, fontSize = 21.sp)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(title, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            Text(detail, color = Muted, fontSize = 11.sp)
+        }
+        Text(size, color = if (selected) Purple else Muted, fontSize = 11.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
     }
 }
 
