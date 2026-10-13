@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (for example runtime-v1)"
+        description: "Release tag to update (for example runtime-v1)"
         required: true
         default: "runtime-v1"
   push:
@@ -44,10 +44,12 @@ jobs:
             :ffmpeg:assembleRelease \
             :aria2c:assembleRelease
 
-      - name: Assemble arm64 runtime ZIP and checksums
+      - name: Assemble versioned Libraries archive
         id: package
         run: |
           set -euo pipefail
+          version="$(./gradlew --no-daemon -q properties | awk -F': ' '$1 == "version" { print $2; exit }')"
+          test -n "$version"
           staging="$RUNNER_TEMP/downly-runtime"
           mkdir -p "$staging"
           unzip -p library/build/outputs/aar/library-release.aar jni/arm64-v8a/libpython.zip.so > "$staging/libpython.zip.so"
@@ -65,10 +67,17 @@ jobs:
           else
             tag="${GITHUB_REF_NAME}"
           fi
-          zip_name="downly-runtime-arm64-${tag}.zip"
+          zip_name="Libraries archive v${version}.zip"
           (cd "$staging" && zip -9 "$RUNNER_TEMP/$zip_name" libpython.zip.so libffmpeg.zip.so libaria2c.zip.so SHA256SUMS)
-          echo "zip=$RUNNER_TEMP/$zip_name" >> "$GITHUB_OUTPUT"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          {
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "zip=$RUNNER_TEMP/$zip_name"
+            echo "python_size=$(du -h "$staging/libpython.zip.so" | cut -f1)"
+            echo "ffmpeg_size=$(du -h "$staging/libffmpeg.zip.so" | cut -f1)"
+            echo "aria2_size=$(du -h "$staging/libaria2c.zip.so" | cut -f1)"
+            echo "bundle_size=$(du -h "$RUNNER_TEMP/$zip_name" | cut -f1)"
+          } >> "$GITHUB_OUTPUT"
           cat "$staging/SHA256SUMS"
 
       - name: Publish GitHub Release
@@ -77,11 +86,29 @@ jobs:
         run: |
           set -euo pipefail
           tag="${{ steps.package.outputs.tag }}"
+          version="${{ steps.package.outputs.version }}"
+          zip_path="${{ steps.package.outputs.zip }}"
+          zip_name="$(basename "$zip_path")"
+          notes="$(cat <<EOF
+          Versioned Android runtime libraries archive for arm64-v8a.
+
+          **Included libraries (v$version):**
+          - Python runtime (`libpython.zip.so`): ${{ steps.package.outputs.python_size }}
+          - FFmpeg / FFprobe runtime (`libffmpeg.zip.so`): ${{ steps.package.outputs.ffmpeg_size }}
+          - aria2 runtime (`libaria2c.zip.so`): ${{ steps.package.outputs.aria2_size }}
+
+          **Bundle ZIP size:** ${{ steps.package.outputs.bundle_size }}
+
+          SHA256SUMS is included inside the ZIP. Checksums are verified by Downly before the runtime is installed.
+          EOF
+          )"
           if gh release view "$tag" --json tagName >/dev/null 2>&1; then
-            gh release upload "$tag" "${{ steps.package.outputs.zip }}" --clobber
+            gh release edit "$tag" --title "Libraries archive v$version" --notes "$notes"
+            gh release delete-asset "$tag" "downly-runtime-arm64-$tag.zip" --yes 2>/dev/null || true
+            gh release upload "$tag" "$zip_path" --clobber
           else
-            gh release create "$tag" "${{ steps.package.outputs.zip }}" \
-              --title "Downloader runtime $tag" \
-              --notes "arm64-v8a Python, FFmpeg and aria2 runtime archives. SHA256SUMS is included inside the ZIP. Produced from this repository's source revision."
+            gh release create "$tag" "$zip_path" \
+              --title "Libraries archive v$version" \
+              --notes "$notes"
           fi
-          gh release view "$tag" --json tagName,assets
+          gh release view "$tag" --json tagName,name,body,assets
