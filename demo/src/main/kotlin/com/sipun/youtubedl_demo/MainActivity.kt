@@ -84,6 +84,10 @@ private val Green = Color(0xFF69D98A)
 class MainActivity : ComponentActivity() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private lateinit var storagePermissionLauncher: ActivityResultLauncher<String>
+    private lateinit var notificationPermissionLauncher: ActivityResultLauncher<String>
+    private val notificationManager by lazy { getSystemService(android.app.NotificationManager::class.java) }
+    private val notificationId = 4107
+    private val notificationChannelId = "download_status"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -91,6 +95,22 @@ class MainActivity : ComponentActivity() {
             registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
                 if (granted) initializeLibrary() else setStatus("Storage permission is required on Android 9 and below to save downloads.")
             }
+        notificationPermissionLauncher =
+            registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* Downloads remain usable if notifications are denied. */ }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            notificationManager.createNotificationChannel(
+                android.app.NotificationChannel(
+                    notificationChannelId,
+                    "Download status",
+                    android.app.NotificationManager.IMPORTANCE_LOW
+                ).apply { description = "Shows active and completed video/audio downloads" }
+            )
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
         setContent {
             MaterialTheme(
                 colorScheme = darkColorScheme(
@@ -123,6 +143,7 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                         onDownload = { url, selectedFormat, audioOnly, dataBudgetMb, progress, done, failed ->
+                            showDownloadNotification("Preparing download", "Starting download", 0, true)
                             lifecycleScope.launch {
                                 var staging: File? = null
                                 try {
@@ -156,7 +177,15 @@ class MainActivity : ComponentActivity() {
                                     )
                                     withContext(Dispatchers.IO) {
                                         YoutubeDL.execute(request) { value, eta, line ->
-                                            mainHandler.post { progress(value, eta, line) }
+                                            mainHandler.post {
+                                                progress(value, eta, line)
+                                                showDownloadNotification(
+                                                    if (audioOnly) "Downloading MP3" else "Downloading video",
+                                                    line.take(100).ifBlank { "Download in progress" },
+                                                    value.toInt().coerceIn(0, 100),
+                                                    true
+                                                )
+                                            }
                                         }
                                     }
                                     val splitStreamPattern = Regex(
@@ -171,8 +200,10 @@ class MainActivity : ComponentActivity() {
                                         throw IllegalStateException("MP3 conversion did not produce an MP3 file.")
                                     }
                                     val destination = withContext(Dispatchers.IO) { publishDownloads(staging) }
+                                    showDownloadNotification("Download complete", "Saved to Downloads/yt-dlp Demo", 100, false)
                                     done(destination)
                                 } catch (e: Exception) {
+                                    showDownloadNotification("Download failed", e.message ?: "Please try again", 0, false)
                                     failed(e.message ?: "Download failed")
                                 } finally {
                                     staging?.deleteRecursively()
@@ -190,6 +221,28 @@ class MainActivity : ComponentActivity() {
 
     private fun setStatus(message: String) {
         errorCallback?.invoke(message)
+    }
+
+    private fun showDownloadNotification(title: String, message: String, progress: Int, ongoing: Boolean) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) return
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            android.app.Notification.Builder(this, notificationChannelId)
+        } else {
+            @Suppress("DEPRECATION")
+            android.app.Notification.Builder(this)
+        }
+        builder
+            .setSmallIcon(if (ongoing) android.R.drawable.stat_sys_download else android.R.drawable.stat_sys_download_done)
+            .setContentTitle(title)
+            .setContentText(message)
+            .setOnlyAlertOnce(true)
+            .setOngoing(ongoing)
+            .setAutoCancel(!ongoing)
+        if (ongoing) builder.setProgress(100, progress.coerceIn(0, 100), progress <= 0)
+        else builder.setProgress(0, 0, false)
+        notificationManager.notify(notificationId, builder.build())
     }
 
     private fun initializeLibrary() {
