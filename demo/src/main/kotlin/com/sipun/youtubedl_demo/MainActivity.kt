@@ -16,6 +16,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -306,8 +307,7 @@ private fun DemoScreen(
             FormatChoice(
                 chosen,
                 "${chosen.height}p",
-                "${chosen.ext?.uppercase(Locale.getDefault()) ?: "VIDEO"} · " +
-                    if (!chosen.acodec.isNullOrBlank() && chosen.acodec != "none") "Video + audio" else "Video only · audio merged automatically",
+                "",
                 formatBytes(bytes)
             )
         }
@@ -323,7 +323,7 @@ private fun DemoScreen(
             FormatChoice(
                 chosen,
                 if (chosen.abr > 0) "${chosen.abr} kbps" else "Audio quality",
-                "${chosen.ext?.uppercase(Locale.getDefault()) ?: "AUDIO"} · audio only → MP3",
+                "",
                 formatBytes(bytes)
             )
         }
@@ -331,10 +331,11 @@ private fun DemoScreen(
 
     val choices = if (audioTab) audioChoices else videoChoices
 
+    Box(Modifier.fillMaxSize().background(Bg)) {
     Column(
         Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()
-            .verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+            .verticalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = if (info != null) 112.dp else 20.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Row(
             Modifier.fillMaxWidth(),
@@ -390,6 +391,30 @@ private fun DemoScreen(
             }
         }
 
+        info?.let { video ->
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Panel),
+                shape = RoundedCornerShape(18.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, PanelBorder)
+            ) {
+                Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        AsyncImage(
+                            model = video.thumbnail,
+                            contentDescription = video.title,
+                            modifier = Modifier.size(width = 104.dp, height = 78.dp).clip(RoundedCornerShape(10.dp)),
+                            contentScale = ContentScale.Crop
+                        )
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(video.title ?: video.fulltitle ?: "Video ready", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 3)
+                            Text(video.uploader ?: video.extractor ?: "Video source", color = Muted, fontSize = 11.sp, maxLines = 1)
+                            Text("${formatDuration(video.duration)} · ${video.viewCount?.let { count -> runCatching { String.format(Locale.getDefault(), "%,d views", count.toLong()) }.getOrNull() } ?: "Views unavailable"}", color = Muted, fontSize = 10.sp)
+                        }
+                    }
+                }
+            }
+        }
+
         Row(
             Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(18.dp)).padding(5.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -429,17 +454,32 @@ private fun DemoScreen(
                             focusedTextColor = Color.White, unfocusedTextColor = Color.White
                         )
                     )
-                }
-            }
-        } else {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = Panel),
-                shape = RoundedCornerShape(18.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, PanelBorder)
-            ) {
-                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("AUDIO ONLY", color = Purple, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                    Text("Only the audio stream is downloaded, then converted to MP3 automatically. Conversion may increase or reduce file size; it cannot improve the original audio quality.", color = Muted, fontSize = 12.sp, lineHeight = 17.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf(50L, 150L, 300L).forEach { preset ->
+                            val active = (dataBudgetMb.toLongOrNull() ?: 150L) == preset
+                            Button(
+                                onClick = { dataBudgetMb = preset.toString() },
+                                modifier = Modifier.weight(1f).height(38.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (active) Color(0xFF39304F) else Color(0xFF242630),
+                                    contentColor = if (active) Purple else Muted
+                                ),
+                                shape = RoundedCornerShape(12.dp),
+                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp)
+                            ) { Text("$preset MB", fontSize = 11.sp, fontWeight = FontWeight.SemiBold) }
+                        }
+                        val unlimited = dataBudgetMb == "100000"
+                        Button(
+                            onClick = { dataBudgetMb = "100000" },
+                            modifier = Modifier.weight(1f).height(38.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (unlimited) Color(0xFF39304F) else Color(0xFF242630),
+                                contentColor = if (unlimited) Purple else Muted
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp)
+                        ) { Text("No limit", fontSize = 11.sp) }
+                    }
                 }
             }
         }
@@ -483,29 +523,6 @@ private fun DemoScreen(
                 }
             }
 
-            Button(
-                onClick = {
-                    busy = true
-                    status = if (audioTab) "Downloading audio and converting to MP3…" else "Downloading video…"
-                    progress = 0f; logLine = ""; savedTo = null
-                    val selected = choices.firstOrNull { it.format.formatId == selectedId }?.format
-                    onDownload(url.trim(), selected, audioTab, (dataBudgetMb.toLongOrNull() ?: 150L).coerceIn(1L, 100000L), { value, remaining, line ->
-                        progress = (value / 100f).coerceIn(0f, 1f)
-                        eta = remaining; logLine = line.take(300)
-                    }, { path ->
-                        progress = 1f; savedTo = path; status = "Download completed"; busy = false
-                    }, { status = "Download failed: $it"; busy = false })
-                },
-                enabled = ready && !busy && info != null,
-                modifier = Modifier.fillMaxWidth().height(54.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Purple, contentColor = Color(0xFF191322),
-                    disabledContainerColor = Color(0xFF343540), disabledContentColor = Color(0xFF858695)
-                ),
-                shape = RoundedCornerShape(30.dp)
-            ) {
-                Text(if (audioTab) "Download MP3" else if (selectedId == null) "Smart Download" else "Download selected quality", fontWeight = FontWeight.Bold)
-            }
         }
 
         if (busy && !ready) {
@@ -551,6 +568,59 @@ private fun DemoScreen(
         }
         Text("Saved to Downloads/yt-dlp Demo. File-size estimates depend on source metadata.", color = Color(0xFF898B9A), fontSize = 11.sp)
     }
+
+    if (info != null) {
+        Surface(
+            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding(),
+            color = Bg,
+            shadowElevation = 10.dp
+        ) {
+            val selectedChoice = choices.firstOrNull { it.format.formatId == selectedId }
+            val budget = (dataBudgetMb.toLongOrNull() ?: 150L).coerceIn(1L, 100000L)
+            val smartChoice = videoChoices.filter { choice ->
+                val bytes = if (choice.format.fileSize > 0) choice.format.fileSize else choice.format.fileSizeApproximate
+                bytes in 1..(budget * 1024L * 1024L)
+            }.maxByOrNull { it.format.height }
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        if (audioTab) selectedChoice?.label ?: "Best available audio"
+                        else selectedChoice?.label ?: smartChoice?.label ?: "Smart quality",
+                        color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp, maxLines = 1
+                    )
+                    Text(
+                        if (audioTab) "MP3 · ${selectedChoice?.size ?: "Size varies"}"
+                        else "MP4 · ${selectedChoice?.size ?: smartChoice?.size ?: "Size varies"}",
+                        color = Purple, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1
+                    )
+                }
+                Button(
+                    onClick = {
+                        busy = true
+                        status = if (audioTab) "Downloading audio and converting to MP3…" else "Downloading video…"
+                        progress = 0f; logLine = ""; savedTo = null
+                        val selected = choices.firstOrNull { it.format.formatId == selectedId }?.format
+                        onDownload(url.trim(), selected, audioTab, budget, { value, remaining, line ->
+                            progress = (value / 100f).coerceIn(0f, 1f); eta = remaining; logLine = line.take(300)
+                        }, { path ->
+                            progress = 1f; savedTo = path; status = "Download completed"; busy = false
+                        }, { status = "Download failed: $it"; busy = false })
+                    },
+                    enabled = ready && !busy && info != null,
+                    modifier = Modifier.weight(1.2f).height(50.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Purple, contentColor = Color(0xFF191322), disabledContainerColor = Color(0xFF343540), disabledContentColor = Color(0xFF858695)),
+                    shape = RoundedCornerShape(28.dp)
+                ) { Text(if (audioTab) "↓  Download MP3" else if (selectedId == null) "↓  Smart Download" else "↓  Download video", fontWeight = FontWeight.Bold, fontSize = 12.sp) }
+            }
+        }
+    }
+
+}
+
 }
 
 @Composable
@@ -563,19 +633,30 @@ private fun FormatRow(
     onClick: () -> Unit
 ) {
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
             .background(if (selected) Color(0xFF29253B) else Color(0xFF20222B))
+            .then(
+                if (selected) Modifier.background(Color.Transparent, RoundedCornerShape(14.dp))
+                else Modifier
+            )
             .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 13.dp, vertical = 14.dp),
+            .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Text(if (selected) "◉" else "○", color = if (selected) Purple else Muted, fontSize = 21.sp)
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(title, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            Text(detail, color = Muted, fontSize = 11.sp)
+        Text(if (selected) "◉" else "○", color = if (selected) Purple else Muted, fontSize = 19.sp)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            if (detail.isNotBlank()) {
+                Text(detail, color = Muted, fontSize = 10.sp, maxLines = 1)
+            }
         }
-        Text(size, color = if (selected) Purple else Muted, fontSize = 11.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
+        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(size, color = if (selected) Purple else Muted, fontSize = 11.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal, maxLines = 1)
+            if (selected) {
+                Text("SELECTED", color = Purple, fontSize = 8.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
+            }
+        }
     }
 }
 
