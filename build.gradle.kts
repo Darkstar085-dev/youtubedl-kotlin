@@ -12,6 +12,11 @@ buildscript {
     }
 }
 
+allprojects {
+    group = "io.github.darkstar085.youtubedl-kotlin"
+    version = "1.0.0"
+}
+
 extra.apply {
     set("junitVer", "4.13.2")
     set("jacksonDatabindVer", "2.22.3")
