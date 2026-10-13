@@ -1,0 +1,83 @@
+name: Build and publish runtime archives
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (for example runtime-v1)"
+        required: true
+        default: "runtime-v1"
+  push:
+    tags:
+      - "runtime-v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: runtime-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Build release archives
+        run: |
+          ./gradlew --no-daemon \
+            :library:assembleRelease \
+            :ffmpeg:assembleRelease \
+            :aria2c:assembleRelease
+
+      - name: Assemble arm64 runtime ZIP and checksums
+        id: package
+        run: |
+          set -euo pipefail
+          staging="$RUNNER_TEMP/downly-runtime"
+          mkdir -p "$staging"
+          unzip -p library/build/outputs/aar/library-release.aar jni/arm64-v8a/libpython.zip.so > "$staging/libpython.zip.so"
+          unzip -p ffmpeg/build/outputs/aar/ffmpeg-release.aar jni/arm64-v8a/libffmpeg.zip.so > "$staging/libffmpeg.zip.so"
+          unzip -p aria2c/build/outputs/aar/aria2c-release.aar jni/arm64-v8a/libaria2c.zip.so > "$staging/libaria2c.zip.so"
+          test -s "$staging/libpython.zip.so"
+          test -s "$staging/libffmpeg.zip.so"
+          test -s "$staging/libaria2c.zip.so"
+          (
+            cd "$staging"
+            sha256sum libpython.zip.so libffmpeg.zip.so libaria2c.zip.so > SHA256SUMS
+          )
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          zip_name="downly-runtime-arm64-${tag}.zip"
+          (cd "$staging" && zip -9 "$RUNNER_TEMP/$zip_name" libpython.zip.so libffmpeg.zip.so libaria2c.zip.so SHA256SUMS)
+          echo "zip=$RUNNER_TEMP/$zip_name" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          cat "$staging/SHA256SUMS"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ steps.package.outputs.tag }}"
+          if gh release view "$tag" --json tagName >/dev/null 2>&1; then
+            gh release upload "$tag" "${{ steps.package.outputs.zip }}" --clobber
+          else
+            gh release create "$tag" "${{ steps.package.outputs.zip }}" \
+              --title "Downloader runtime $tag" \
+              --notes "arm64-v8a Python, FFmpeg and aria2 runtime archives. SHA256SUMS is included inside the ZIP. Produced from this repository's source revision."
+          fi
+          gh release view "$tag" --json tagName,assets
