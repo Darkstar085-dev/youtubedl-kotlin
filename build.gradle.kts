@@ -14,7 +14,7 @@ buildscript {
 
 allprojects {
     group = "io.github.darkstar085.youtubedl-kotlin"
-    version = "1.0.0"
+    version = providers.gradleProperty("publishedVersion").orElse("1.0.0").get()
 }
 
 extra.apply {
