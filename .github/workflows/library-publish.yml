@@ -41,13 +41,15 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: gradle/actions/setup-gradle@v6
-      - name: Configure GitHub Packages Maven publishing
+      - name: Publish modules to GitHub Packages
         env:
           GITHUB_ACTOR: ${{ github.actor }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          echo "Publishing to GitHub Packages must be configured in each module's MavenPublication repository block before tagging."
-          echo "Current module publication scripts define publications but do not define a Maven repository."
-          echo "This job intentionally fails until a repository is configured; runtime ZIP releases remain available independently."
-          exit 1
+          version="${GITHUB_REF_NAME#v}"
+          ./gradlew --no-daemon \
+            -PpublishedVersion="$version" \
+            :library:publishReleasePublicationToGitHubPackagesRepository \
+            :ffmpeg:publishReleasePublicationToGitHubPackagesRepository \
+            :aria2c:publishReleasePublicationToGitHubPackagesRepository
