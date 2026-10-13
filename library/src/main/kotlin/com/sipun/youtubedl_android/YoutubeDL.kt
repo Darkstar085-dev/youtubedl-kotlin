@@ -81,7 +81,7 @@ object YoutubeDL {
                 nativeFfmpegPath,
                 nativeFfprobePath,
                 quickJsPath!!,
-                File(binDir, pythonLibName)
+                runtimeArchive(pythonLibName)
             )
             val missing = nativeFiles.filter { !it.isFile || it.length() == 0L }
             if (missing.isNotEmpty()) {
