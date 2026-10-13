@@ -8,6 +8,15 @@ import java.io.File
 import java.io.IOException
 
 object Aria2c {
+    private var runtimeArchiveDirectory: File? = null
+
+    /** Configure downloaded runtime archives before calling init(). */
+    @JvmStatic
+    fun setRuntimeArchiveDirectory(directory: File?) {
+        check(!initialized) { "Runtime archive directory must be set before initialization" }
+        runtimeArchiveDirectory = directory
+    }
+
     private var initialized = false
     private var binDir: File? = null
 
@@ -26,7 +35,7 @@ object Aria2c {
     }
 
     private fun initAria2c(appContext: Context, aria2cDir: File) {
-        val archive = File(binDir, aria2cLibName)
+        val archive = File(runtimeArchiveDirectory ?: binDir!!, aria2cLibName)
         if (!archive.exists()) return
         if (!archive.isFile || archive.length() == 0L) {
             throw YoutubeDLException("aria2 runtime archive is empty")

@@ -1,0 +1,98 @@
+name: Build and publish Libraries archive
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: libraries-release
+  cancel-in-progress: false
+
+jobs:
+  libraries:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Build release libraries
+        run: |
+          ./gradlew --no-daemon \
+            :library:assembleRelease \
+            :ffmpeg:assembleRelease \
+            :aria2c:assembleRelease
+
+      - name: Assemble versioned Libraries archive
+        id: package
+        run: |
+          set -euo pipefail
+          version="$(./gradlew --no-daemon -q properties | awk -F': ' '$1 == "version" { print $2; exit }')"
+          test -n "$version"
+          staging="$RUNNER_TEMP/libraries-bundle"
+          mkdir -p "$staging"
+          unzip -p library/build/outputs/aar/library-release.aar jni/arm64-v8a/libpython.zip.so > "$staging/libpython.zip.so"
+          unzip -p ffmpeg/build/outputs/aar/ffmpeg-release.aar jni/arm64-v8a/libffmpeg.zip.so > "$staging/libffmpeg.zip.so"
+          unzip -p aria2c/build/outputs/aar/aria2c-release.aar jni/arm64-v8a/libaria2c.zip.so > "$staging/libaria2c.zip.so"
+          test -s "$staging/libpython.zip.so"
+          test -s "$staging/libffmpeg.zip.so"
+          test -s "$staging/libaria2c.zip.so"
+          (
+            cd "$staging"
+            sha256sum libpython.zip.so libffmpeg.zip.so libaria2c.zip.so > SHA256SUMS
+          )
+          zip_name="libraries_v${version}.zip"
+          (cd "$staging" && zip -9 "$RUNNER_TEMP/$zip_name" libpython.zip.so libffmpeg.zip.so libaria2c.zip.so SHA256SUMS)
+          {
+            echo "version=$version"
+            echo "zip=$RUNNER_TEMP/$zip_name"
+            echo "python_size=$(du -h "$staging/libpython.zip.so" | cut -f1)"
+            echo "ffmpeg_size=$(du -h "$staging/libffmpeg.zip.so" | cut -f1)"
+            echo "aria2_size=$(du -h "$staging/libaria2c.zip.so" | cut -f1)"
+            echo "bundle_size=$(du -h "$RUNNER_TEMP/$zip_name" | cut -f1)"
+          } >> "$GITHUB_OUTPUT"
+          cat "$staging/SHA256SUMS"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="${{ steps.package.outputs.version }}"
+          tag="v$version"
+          zip_path="${{ steps.package.outputs.zip }}"
+          notes="$(cat <<EOF
+          | Library | Size |
+          |---|---:|
+          | Python runtime | ${{ steps.package.outputs.python_size }} |
+          | FFmpeg / FFprobe runtime | ${{ steps.package.outputs.ffmpeg_size }} |
+          | aria2 runtime | ${{ steps.package.outputs.aria2_size }} |
+          | **Total ZIP** | **${{ steps.package.outputs.bundle_size }}** |
+          EOF
+          )"
+          if gh release view "$tag" --json tagName >/dev/null 2>&1; then
+            gh release edit "$tag" --title "Libraries archive v$version" --notes "$notes"
+            old_assets="$(gh release view "$tag" --json assets --jq '.assets[].name | select(startswith("libraries_v") and endswith(".zip"))')"
+            while IFS= read -r asset; do
+              [ -z "$asset" ] || gh release delete-asset "$tag" "$asset" --yes
+            done <<< "$old_assets"
+            gh release upload "$tag" "$zip_path" --clobber
+          else
+            gh release create "$tag" "$zip_path" \
+              --title "Libraries archive v$version" \
+              --notes "$notes"
+          fi
+          gh release view "$tag" --json tagName,name,body,assets

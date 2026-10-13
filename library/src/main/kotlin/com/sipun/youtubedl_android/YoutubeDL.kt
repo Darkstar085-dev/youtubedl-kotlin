@@ -14,6 +14,17 @@ import java.util.Collections
 import java.util.concurrent.TimeUnit
 
 object YoutubeDL {
+    private var runtimeArchiveDirectory: File? = null
+
+    /** Configure downloaded runtime archives before calling init(). */
+    @JvmStatic
+    fun setRuntimeArchiveDirectory(directory: File?) {
+        check(!initialized) { "Runtime archive directory must be set before initialization" }
+        runtimeArchiveDirectory = directory
+    }
+
+    private fun runtimeArchive(name: String): File =
+        File(runtimeArchiveDirectory ?: binDir!!, name)
     private var initialized = false
     private var pythonPath: File? = null
     private var ffmpegPath: File? = null
@@ -70,7 +81,7 @@ object YoutubeDL {
                 nativeFfmpegPath,
                 nativeFfprobePath,
                 quickJsPath!!,
-                File(binDir, pythonLibName)
+                runtimeArchive(pythonLibName)
             )
             val missing = nativeFiles.filter { !it.isFile || it.length() == 0L }
             if (missing.isNotEmpty()) {
@@ -132,7 +143,7 @@ object YoutubeDL {
 
     @Throws(YoutubeDLException::class)
     fun initPython(appContext: Context, pythonDir: File) {
-        val archive = File(binDir, pythonLibName)
+        val archive = runtimeArchive(pythonLibName)
         if (!archive.isFile || archive.length() == 0L) {
             throw YoutubeDLException("Python runtime archive is missing or empty")
         }
