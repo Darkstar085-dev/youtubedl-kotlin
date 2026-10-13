@@ -2,17 +2,6 @@ name: Build and publish runtime archives
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - "library/**"
-      - "ffmpeg/**"
-      - "aria2c/**"
-      - "build.gradle.kts"
-      - "gradle.properties"
-      - "settings.gradle.kts"
-      - ".github/workflows/runtime-release.yml"
 
 permissions:
   contents: write
@@ -65,7 +54,7 @@ jobs:
             cd "$staging"
             sha256sum libpython.zip.so libffmpeg.zip.so libaria2c.zip.so > SHA256SUMS
           )
-          zip_name="Libraries archive v${version}.zip"
+          zip_name="libraries_v${version}.zip"
           (cd "$staging" && zip -9 "$RUNNER_TEMP/$zip_name" libpython.zip.so libffmpeg.zip.so libaria2c.zip.so SHA256SUMS)
           {
             echo "version=$version"
@@ -85,15 +74,10 @@ jobs:
           tag="runtime-v1"
           version="${{ steps.package.outputs.version }}"
           zip_path="${{ steps.package.outputs.zip }}"
-          notes="$(cat <<EOF
-          Python: ${{ steps.package.outputs.python_size }} · FFmpeg: ${{ steps.package.outputs.ffmpeg_size }} · aria2: ${{ steps.package.outputs.aria2_size }}
-
-          Total ZIP: ${{ steps.package.outputs.bundle_size }}
-          EOF
-          )"
+          notes="Python v$version: ${{ steps.package.outputs.python_size }} · FFmpeg v$version: ${{ steps.package.outputs.ffmpeg_size }} · aria2 v$version: ${{ steps.package.outputs.aria2_size }} · Total ZIP: ${{ steps.package.outputs.bundle_size }}"
           if gh release view "$tag" --json tagName >/dev/null 2>&1; then
             gh release edit "$tag" --title "Libraries archive v$version" --notes "$notes"
-            old_assets="$(gh release view "$tag" --json assets --jq '.assets[].name | select(startswith("Libraries archive v") and endswith(".zip"))')"
+            old_assets="$(gh release view "$tag" --json assets --jq '.assets[].name | select(startswith("libraries_v") and endswith(".zip"))')"
             while IFS= read -r asset; do
               [ -z "$asset" ] || gh release delete-asset "$tag" "$asset" --yes
             done <<< "$old_assets"
