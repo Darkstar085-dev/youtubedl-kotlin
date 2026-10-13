@@ -109,6 +109,28 @@ Run these commands from the repository root:
 ./gradlew :library:assembleRelease :ffmpeg:assembleRelease :aria2c:assembleRelease :demo:assembleDebug
 ```
 
+## Bundled runtime versions
+
+The versions below describe the runtime tools and packages bundled with this repository. The
+complete tab-separated inventory is maintained in [runtime-versions.tsv](runtime-versions.tsv).
+
+<!-- RUNTIME-VERSIONS:START -->
+
+| Scope     | Component              | Version      |
+|-----------|------------------------|--------------|
+| all       | yt-dlp                 | 2026.08.19   |
+| arm64-v8a | aria2                  | 1.37.0-3     |
+| arm64-v8a | ffmpeg                 | 8.1.3        |
+| arm64-v8a | libandroid-support     | 29-1         |
+| arm64-v8a | mutagen                | 1.48.1       |
+| arm64-v8a | openssl                | 1:3.6.5      |
+| arm64-v8a | python                 | 3.14.6-1     |
+| arm64-v8a | python-pycryptodomex   | 3.24.1       |
+| arm64-v8a | quickjs-ng             | 0.17.0       |
+| arm64-v8a | zlib                   | 1.3.2        |
+
+<!-- RUNTIME-VERSIONS:END -->
+
 ## Bundled binary sizes
 
 Sizes below are the current on-disk sizes of the bundled runtime files in this repository. They are
