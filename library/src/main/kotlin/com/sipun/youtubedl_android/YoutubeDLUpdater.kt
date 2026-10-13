@@ -128,7 +128,8 @@ internal object YoutubeDLUpdater {
             if (!matcher.matches()) {
                 throw YoutubeDLException("Invalid yt-dlp release SHA-256 metadata")
             }
-            matcher.group(1).lowercase()
+            matcher.group(1)?.lowercase()
+                ?: throw YoutubeDLException("Invalid release SHA-256 metadata")
         }
 
         return url to expectedDigest

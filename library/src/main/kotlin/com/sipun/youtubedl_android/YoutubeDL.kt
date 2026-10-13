@@ -332,13 +332,15 @@ object YoutubeDL {
             .redirectErrorStream(redirectErrorStream)
 
         processBuilder.environment().apply {
-            this["LD_LIBRARY_PATH"] = ENV_LD_LIBRARY_PATH
-            this["SSL_CERT_FILE"] = ENV_SSL_CERT_FILE
-            this["OPENSSL_CONF"] = ENV_OPENSSL_CONF
-            this["OPENSSL_MODULES"] = ENV_OPENSSL_MODULES
-            this["PATH"] = System.getenv("PATH") + ":" + binDir!!.absolutePath
-            this["PYTHONHOME"] = ENV_PYTHONHOME
-            this["HOME"] = ENV_PYTHONHOME
+            ENV_LD_LIBRARY_PATH?.let { this["LD_LIBRARY_PATH"] = it }
+            ENV_SSL_CERT_FILE?.let { this["SSL_CERT_FILE"] = it }
+            ENV_OPENSSL_CONF?.let { this["OPENSSL_CONF"] = it }
+            ENV_OPENSSL_MODULES?.let { this["OPENSSL_MODULES"] = it }
+            this["PATH"] = System.getenv("PATH").orEmpty() + ":" + binDir!!.absolutePath
+            ENV_PYTHONHOME?.let {
+                this["PYTHONHOME"] = it
+                this["HOME"] = it
+            }
             this["TMPDIR"] = TMPDIR
         }
 

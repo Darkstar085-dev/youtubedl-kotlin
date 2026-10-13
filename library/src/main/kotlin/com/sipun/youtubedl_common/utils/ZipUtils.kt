@@ -1,7 +1,6 @@
 package com.sipun.youtubedl_common.utils
 
 import android.system.Os
-import org.apache.commons.compress.archivers.zip.ZipArchiveEntry
 import org.apache.commons.compress.archivers.zip.ZipArchiveInputStream
 import org.apache.commons.compress.archivers.zip.ZipFile
 import org.apache.commons.io.IOUtils
@@ -13,7 +12,8 @@ import java.nio.charset.StandardCharsets
 
 object ZipUtils {
     fun unzip(sourceFile: File?, targetDirectory: File) {
-        ZipFile(sourceFile).use { zipFile ->
+        val file = sourceFile ?: throw IllegalArgumentException("Source ZIP file is required")
+        ZipFile.builder().setFile(file).get().use { zipFile ->
             val entries = zipFile.entries
             while (entries.hasMoreElements()) {
                 val entry = entries.nextElement()
@@ -45,10 +45,11 @@ object ZipUtils {
     }
 
     fun unzip(inputStream: InputStream?, targetDirectory: File) {
-        ZipArchiveInputStream(BufferedInputStream(inputStream)).use { zis ->
-            var entry: ZipArchiveEntry? = null
-            while (zis.nextZipEntry.also { entry = it } != null) {
-                val entryDestination = File(targetDirectory, entry!!.name)
+        val stream = inputStream ?: throw IllegalArgumentException("Input ZIP stream is required")
+        ZipArchiveInputStream(BufferedInputStream(stream)).use { zis ->
+            while (true) {
+                val entry = zis.nextEntry ?: break
+                val entryDestination = File(targetDirectory, entry.name)
                 // prevent zipSlip
                 if (!entryDestination.canonicalPath.startsWith(targetDirectory.canonicalPath + File.separator)) {
                     throw IllegalAccessException("Entry is outside of the target dir: " + entry.name)
@@ -56,7 +57,7 @@ object ZipUtils {
                 if (entry.isDirectory) {
                     entryDestination.mkdirs()
                 } else {
-                    entryDestination.parentFile.mkdirs()
+                    entryDestination.parentFile?.mkdirs()
                     FileOutputStream(entryDestination).use { out -> IOUtils.copy(zis, out) }
                 }
             }
