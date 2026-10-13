@@ -97,7 +97,7 @@ jobs:
             while IFS= read -r asset; do
               [ -z "$asset" ] || gh release delete-asset "$tag" "$asset" --yes
             done <<< "$old_assets"
-            gh release upload "$tag" "$zip_path"
+            gh release upload "$tag" "$zip_path" --clobber
           else
             gh release create "$tag" "$zip_path" \
               --title "Libraries archive v$version" \
