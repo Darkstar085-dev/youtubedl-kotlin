@@ -9,6 +9,15 @@ import java.io.File
 import java.io.IOException
 
 object FFmpeg {
+    private var runtimeArchiveDirectory: File? = null
+
+    /** Configure downloaded runtime archives before calling init(). */
+    @JvmStatic
+    fun setRuntimeArchiveDirectory(directory: File?) {
+        check(!initialized) { "Runtime archive directory must be set before initialization" }
+        runtimeArchiveDirectory = directory
+    }
+
     private var initialized = false
     private var binDir: File? = null
 
@@ -27,7 +36,7 @@ object FFmpeg {
     }
 
     private fun initFFmpeg(appContext: Context, ffmpegDir: File) {
-        val archive = File(binDir, ffmpegLibName)
+        val archive = File(runtimeArchiveDirectory ?: binDir!!, ffmpegLibName)
         if (!archive.isFile || archive.length() == 0L) {
             throw YoutubeDLException("FFmpeg runtime archive is missing or empty")
         }
