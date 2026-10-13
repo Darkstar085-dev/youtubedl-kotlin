@@ -71,8 +71,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tag="runtime-v1"
           version="${{ steps.package.outputs.version }}"
+          tag="v$version"
           zip_path="${{ steps.package.outputs.zip }}"
           notes="$(cat <<EOF
           | Library | Version | Size |
