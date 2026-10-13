@@ -86,16 +86,9 @@ jobs:
           version="${{ steps.package.outputs.version }}"
           zip_path="${{ steps.package.outputs.zip }}"
           notes="$(cat <<EOF
-          Versioned Android runtime libraries archive for arm64-v8a.
+          Python: ${{ steps.package.outputs.python_size }} · FFmpeg: ${{ steps.package.outputs.ffmpeg_size }} · aria2: ${{ steps.package.outputs.aria2_size }}
 
-          **Included libraries (v$version):**
-          - Python runtime (`libpython.zip.so`): ${{ steps.package.outputs.python_size }}
-          - FFmpeg / FFprobe runtime (`libffmpeg.zip.so`): ${{ steps.package.outputs.ffmpeg_size }}
-          - aria2 runtime (`libaria2c.zip.so`): ${{ steps.package.outputs.aria2_size }}
-
-          **Bundle ZIP size:** ${{ steps.package.outputs.bundle_size }}
-
-          SHA256SUMS is included inside the ZIP. Checksums are verified by Downly before the runtime is installed. The asset version is derived automatically from Gradle.
+          Total ZIP: ${{ steps.package.outputs.bundle_size }}
           EOF
           )"
           if gh release view "$tag" --json tagName >/dev/null 2>&1; then
