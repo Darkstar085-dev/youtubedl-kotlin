@@ -1,7 +1,51 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
-log() { printf '\n==> %s\n' "$*"; }
+
+clear >/dev/null 2>&1 || printf '\033[2J\033[H'
+
+FAILURE_REASON=""
+FAILURE_COMMAND=""
+die() {
+  FAILURE_REASON="$*"
+  printf 'ERROR: %s\n' "$*" >&2
+  exit 1
+}
+handle_error() {
+  local code="$1"
+  local command="$2"
+  FAILURE_COMMAND="$command"
+  FAILURE_REASON="Command failed with exit code $code: $command"
+  printf '\nERROR: %s\n' "$FAILURE_REASON" >> "${DASHBOARD_LOG:-${BOOTSTRAP_LOG:-/dev/null}}" 2>/dev/null || true
+  if [[ -n "${DASHBOARD_STATE:-}" && -f "${DASHBOARD_STATE:-}" ]]; then
+    python3 "$ROOT/.github/scripts/runtime-dashboard.py" update "$DASHBOARD_STATE" "" "$FAILURE_REASON" >/dev/null 2>&1 || true
+  fi
+  return 0
+}
+log() {
+  local message="$*" task=""
+  case "$message" in
+    "Removing the cached"*) task="clean-cache" ;;
+    "Syncing main"*) task="sync-repo" ;;
+    "Refreshing Termux package indexes"*) task="refresh-index" ;;
+    "Checking repository candidate versions"*|"Checking "[a-z]*) task="check-versions" ;;
+    "Reinstalling required Termux runtime packages"*) task="install-packages" ;;
+    "Preparing the Termux package build environment"*) task="build-env" ;;
+    "Building native Python"*) task="build-native" ;;
+    "Assembling Python runtime"*) task="assemble-python" ;;
+    "Bundling OpenSSL provider"*) task="openssl-providers" ;;
+    "Python runtime versions changed"*|"Python, PyCryptodomeX"*) task="python-runtime" ;;
+    "Checking FFmpeg/aria2"*|"Refreshing only media runtime"*|"FFmpeg and aria2 tracked"*) task="media-runtime" ;;
+    "Downloading and validating the official yt-dlp"*) task="ytdlp" ;;
+    "Validating runtime payload"*) task="validate" ;;
+    "Updating version metadata"*|"Updated runtime versions"*) task="metadata" ;;
+    "Reviewing generated diff"*|"No tracked changes"*) task="commit" ;;
+    "Pushing runtime changes"*|"Native arm64-v8a runtime preparation complete"*) task="push" ;;
+  esac
+  printf '%s\n' "$message" >> "${BOOTSTRAP_LOG:-/dev/null}"
+  if [[ -n "${DASHBOARD_STATE:-}" && -f "${DASHBOARD_STATE:-}" ]]; then
+    python3 "$ROOT/.github/scripts/runtime-dashboard.py" update "$DASHBOARD_STATE" "$task" "$message" || true
+  fi
+}
 manifest_version() {
   awk -F '\t' -v scope="$1" -v component="$2" '$1 == scope && $2 == component { print $3; exit }' runtime-versions.tsv 2>/dev/null
 }
@@ -45,6 +89,45 @@ export RUNTIME_REPOSITORY="$ORIGIN_REPO"
 [[ "$(uname -m)" == "aarch64" || "$(uname -m)" == "arm64" ]] || die "Only native aarch64 / Android arm64-v8a is supported."
 [[ "$(git branch --show-current)" == "main" ]] || die "Checkout main first."
 [[ -z "$(git status --porcelain)" ]] || die "Working tree must be clean."
+
+BOOTSTRAP_LOG="$PREFIX/tmp/youtubedl-bootstrap.log"
+: > "$BOOTSTRAP_LOG"
+command -v pkg >/dev/null 2>&1 || die "Termux pkg command is missing; repair the Termux package manager first."
+command -v apt-get >/dev/null 2>&1 || die "Termux apt-get is missing; repair the Termux package manager first."
+SCRIPT_COMMANDS=(curl zip unzip readelf dpkg-deb dpkg-query apt-cache apt-get awk find grep install readlink mktemp basename)
+MISSING_PACKAGES=()
+for cmd in "${SCRIPT_COMMANDS[@]}"; do
+  command -v "$cmd" >/dev/null 2>&1 && continue
+  case "$cmd" in
+    curl) package="curl" ;;
+    zip) package="zip" ;;
+    unzip) package="unzip" ;;
+    readelf) package="binutils" ;;
+    dpkg-deb|dpkg-query) package="dpkg" ;;
+    apt-cache|apt-get) package="apt" ;;
+    awk) package="gawk" ;;
+    find) package="findutils" ;;
+    grep) package="grep" ;;
+    install|readlink|mktemp|basename) package="coreutils" ;;
+    *) die "No Termux package mapping is defined for missing command: $cmd" ;;
+  esac
+  found=0
+  for existing in "${MISSING_PACKAGES[@]}"; do
+    [[ "$existing" == "$package" ]] && found=1
+  done
+  [[ "$found" -eq 1 ]] || MISSING_PACKAGES+=("$package")
+done
+if [[ "${#MISSING_PACKAGES[@]}" -gt 0 ]]; then
+  printf 'Installing missing script prerequisites silently: %s\n' "${MISSING_PACKAGES[*]}" >>"$BOOTSTRAP_LOG"
+  if ! pkg install -y "${MISSING_PACKAGES[@]}" >>"$BOOTSTRAP_LOG" 2>&1; then
+    tail -n 20 "$BOOTSTRAP_LOG" >&2 || true
+    die "Unable to install script prerequisites. Runtime packages were not included in this prerequisite install."
+  fi
+fi
+for cmd in "${SCRIPT_COMMANDS[@]}"; do
+  command -v "$cmd" >/dev/null 2>&1 || die "Required script command is still missing after prerequisite installation: $cmd"
+done
+
 PKGDIR="$HOME/.cache/youtubedl-termux-packages"
 BUILD_MARKER_DIR="$HOME/.termux-build/.built-packages"
 [[ "$PKGDIR" == "$HOME/.cache/youtubedl-termux-packages" ]] || die "Unexpected ARM64 cache path; refusing to clean."
@@ -57,11 +140,10 @@ for marker in python python-pycryptodomex quickjs-ng; do
 done
 log "Build cache cleared; Python, PyCryptodomeX and QuickJS will be rebuilt on every run."
 log "Syncing main"
-git fetch origin main
-git pull --ff-only origin main
-for cmd in curl python3 zip unzip readelf dpkg-deb dpkg-query apt-cache apt-get; do command -v "$cmd" >/dev/null || die "Missing $cmd; install with pkg install $cmd"; done
+git fetch origin main >>"$BOOTSTRAP_LOG" 2>&1
+git pull --ff-only origin main >>"$BOOTSTRAP_LOG" 2>&1
 log "Refreshing Termux package indexes and checking available runtime versions"
-if apt-get update; then
+if apt-get update >>"$BOOTSTRAP_LOG" 2>&1; then
   log "Termux package indexes refreshed."
 else
   log "WARNING: apt-get update returned a non-zero status; continuing with cached package indexes."
@@ -80,15 +162,62 @@ for component in python python-pycryptodomex quickjs-ng openssl libandroid-suppo
   fi
 done
 log "Reinstalling required Termux runtime packages without interactive prompts"
-if ! apt-get install --reinstall -y python python-pycryptodomex quickjs-ng openssl libandroid-support zlib ffmpeg aria2; then
+if ! apt-get install --reinstall -y python python-pycryptodomex quickjs-ng openssl libandroid-support zlib ffmpeg aria2 >>"$BOOTSTRAP_LOG" 2>&1; then
+  tail -n 30 "$BOOTSTRAP_LOG" >&2 || true
   die "Termux runtime package reinstall failed."
 fi
+command -v python3 >/dev/null 2>&1 || die "Python runtime package was installed but python3 is still unavailable."
+if ! python3 -m pip --version >>"$BOOTSTRAP_LOG" 2>&1; then
+  log "Installing pip support required by the build script"
+  if ! pkg install -y python-pip >>"$BOOTSTRAP_LOG" 2>&1; then
+    tail -n 30 "$BOOTSTRAP_LOG" >&2 || true
+    die "Python pip support is required to install Mutagen."
+  fi
+  python3 -m pip --version >/dev/null 2>&1 || die "Python pip support is still unavailable after installation."
+fi
+DASHBOARD_STATE="$PREFIX/tmp/youtubedl-runtime-state.json"
+DASHBOARD_LOG="$PREFIX/tmp/youtubedl-runtime-last.log"
+: > "$DASHBOARD_LOG"
+python3 .github/scripts/runtime-dashboard.py init "$DASHBOARD_STATE"
+python3 .github/scripts/runtime-dashboard.py watch "$DASHBOARD_STATE" "$DASHBOARD_LOG" >/dev/null 2>&1 &
+DASHBOARD_PID=$!
+if [[ -w /dev/tty ]]; then
+  exec 3>/dev/tty
+else
+  exec 3>&1
+fi
+exec >>"$DASHBOARD_LOG" 2>&1
+cleanup() {
+  local result=$?
+  trap - EXIT ERR
+  if [[ -n "${WORK:-}" && -d "${WORK:-}" ]]; then rm -rf -- "$WORK"; fi
+  if [[ "$result" -ne 0 && -z "$FAILURE_REASON" ]]; then
+    FAILURE_REASON="Runtime builder exited with code $result."
+  fi
+  python3 .github/scripts/runtime-dashboard.py finish "$DASHBOARD_STATE" "$result" || true
+  if [[ -n "${DASHBOARD_PID:-}" ]]; then wait "$DASHBOARD_PID" || true; fi
+  rm -f -- "$DASHBOARD_STATE" "$DASHBOARD_STATE.tmp"
+  if [[ "$result" -ne 0 ]]; then
+    {
+      printf '\n\033[91m✗ BUILD FAILED\033[0m\n'
+      printf 'Reason: %s\n' "$FAILURE_REASON"
+      if [[ -n "$FAILURE_COMMAND" ]]; then printf 'Command: %s\n' "$FAILURE_COMMAND"; fi
+      printf 'Full log: %s\n' "$DASHBOARD_LOG"
+      printf '\nLast command output:\n'
+      tail -n 18 "$DASHBOARD_LOG" 2>/dev/null || true
+      printf '\n'
+    } >&3
+  fi
+  exec 3>&-
+}
+trap 'handle_error "$?" "$BASH_COMMAND"' ERR
+trap cleanup EXIT
 [[ -e "$PREFIX/lib/libandroid-support.so" || -e "$PREFIX/lib/libandroid-support.so.29" ]] || die "libandroid-support package installed but its shared library was not found under $PREFIX/lib."
 for exe in ffmpeg ffprobe aria2c; do
   [[ -x "$PREFIX/bin/$exe" ]] || die "Required Termux runtime executable is missing: $PREFIX/bin/$exe"
 done
 WORK="$(mktemp -d "$PREFIX/tmp/youtubedl.XXXXXX")"
-trap 'rm -rf "$WORK"' EXIT
+: # WORK is cleaned by the dashboard-aware EXIT handler
 if [[ -d "$PKGDIR/.git" ]]; then
   git -C "$PKGDIR" fetch origin
   git -C "$PKGDIR" pull --ff-only
@@ -249,6 +378,7 @@ if [[ -n "$DESCRIPTION" ]]; then
 fi
 COMMIT_ARGS+=(-m "Signed-off-by: S I P U N <sipunkumar85@gmail.com>")
 git commit "${COMMIT_ARGS[@]}"
+log "Pushing runtime changes and verifying remote HEAD"
 validate_origin
 [[ "$ORIGIN_REPO" == "$INITIAL_ORIGIN_REPO" ]] || die "Git origin changed during the build."
 git fetch origin main
