@@ -193,7 +193,7 @@ not the compressed download size of a Git clone. The full file-by-file byte coun
 | arm64-v8a | FFmpeg archive | 41.77 MB |
 | arm64-v8a | Python runtime archive | 24.21 MB |
 | arm64-v8a | Python shared library | 4,448 bytes |
-| arm64-v8a | QuickJS | 129,552 bytes |
+| arm64-v8a | QuickJS library | 129,552 bytes |
 | arm64-v8a | aria2 | 2.55 MB |
 | arm64-v8a | aria2 archive | 4.64 MB |
 | arm64-v8a | ffprobe | 193,584 bytes |
