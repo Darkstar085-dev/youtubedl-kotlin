@@ -1,10 +1,10 @@
 scope	component	path	size_bytes
 all	yt-dlp	library/src/main/res/raw/ytdlp	3072469
-arm64-v8a	FFmpeg	ffmpeg/src/main/jniLibs/arm64-v8a/libffmpeg.so	399016
-arm64-v8a	FFmpeg archive	ffmpeg/src/main/jniLibs/arm64-v8a/libffmpeg.zip.so	41769725
+arm64-v8a	FFmpeg	ffmpeg/src/main/jniLibs/arm64-v8a/libffmpeg.so	398960
+arm64-v8a	FFmpeg archive	ffmpeg/src/main/jniLibs/arm64-v8a/libffmpeg.zip.so	42340843
 arm64-v8a	Python runtime archive	library/src/main/jniLibs/arm64-v8a/libpython.zip.so	24214616
 arm64-v8a	Python shared library	library/src/main/jniLibs/arm64-v8a/libpython.so	4448
 arm64-v8a	QuickJS library	library/src/main/jniLibs/arm64-v8a/libqjs.so	129552
 arm64-v8a	aria2	aria2c/src/main/jniLibs/arm64-v8a/libaria2c.so	2547024
 arm64-v8a	aria2 archive	aria2c/src/main/jniLibs/arm64-v8a/libaria2c.zip.so	4644714
-arm64-v8a	ffprobe	ffmpeg/src/main/jniLibs/arm64-v8a/libffprobe.so	193584
+arm64-v8a	ffprobe	ffmpeg/src/main/jniLibs/arm64-v8a/libffprobe.so	197152

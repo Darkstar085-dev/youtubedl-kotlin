@@ -164,10 +164,10 @@ complete tab-separated inventory is maintained in [runtime-versions.tsv](runtime
 <!-- RUNTIME-VERSIONS:START -->
 
 | Scope | Component | Version |
-|-------|-----------|---------|
+| --- | --- | --- |
 | all | yt-dlp | 2026.08.19 |
 | arm64-v8a | aria2 | 1.37.0-3 |
-| arm64-v8a | ffmpeg | 8.1.3 |
+| arm64-v8a | ffmpeg | 9.0.2 |
 | arm64-v8a | libandroid-support | 29-1 |
 | arm64-v8a | mutagen | 1.48.1 |
 | arm64-v8a | openssl | 1:3.6.5 |
@@ -187,16 +187,16 @@ not the compressed download size of a Git clone. The full file-by-file byte coun
 <!-- RUNTIME-SIZES:START -->
 
 | ABI | Component | File size |
-|-----|-----------|----------:|
+| --- | --- | ---: |
 | all | yt-dlp | 3.07 MB |
-| arm64-v8a | FFmpeg | 399,016 bytes |
-| arm64-v8a | FFmpeg archive | 41.77 MB |
+| arm64-v8a | FFmpeg | 398,960 bytes |
+| arm64-v8a | FFmpeg archive | 42.34 MB |
 | arm64-v8a | Python runtime archive | 24.21 MB |
 | arm64-v8a | Python shared library | 4,448 bytes |
 | arm64-v8a | QuickJS library | 129,552 bytes |
 | arm64-v8a | aria2 | 2.55 MB |
 | arm64-v8a | aria2 archive | 4.64 MB |
-| arm64-v8a | ffprobe | 193,584 bytes |
+| arm64-v8a | ffprobe | 197,152 bytes |
 
 <!-- RUNTIME-SIZES:END -->
 
