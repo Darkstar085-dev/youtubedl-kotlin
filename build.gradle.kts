@@ -1,6 +1,6 @@
 // Shared build configuration for the youtubedl-kotlin modules.
 buildscript {
-    val kotlinVersion by extra("2.4.20")
+    val kotlinVersion = "2.4.20"
     repositories {
         google()
         mavenCentral()
