@@ -372,7 +372,7 @@ git diff --cached --stat
 DESCRIPTION="$(cat "$WORK/version-description.txt")"
 git config user.name >/dev/null || die "Git user.name is not configured."
 git config user.email >/dev/null || die "Git user.email is not configured."
-COMMIT_ARGS=(-m "build: refresh Android runtime artifacts")
+COMMIT_ARGS=(-m "build(runtime): refresh Android runtime artifacts")
 if [[ -n "$DESCRIPTION" ]]; then
   COMMIT_ARGS+=(-m "$DESCRIPTION")
 fi

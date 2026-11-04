@@ -167,9 +167,9 @@ def main():
         key = (row["scope"], row["component"])
         old, new = before_versions.get(key), row["version"]
         if old != new:
-            changes.append(f"- {key[0]} {key[1]}: {old + ' -> ' if old is not None else 'added '}{new}")
+            changes.append(f"- update {key[0]} {key[1]}: {old + ' -> ' if old is not None else 'added '}{new}")
     args.description_file.parent.mkdir(parents=True, exist_ok=True)
-    description = "Updated bundled runtime versions:\n" + "\n".join(changes) + "\n" if changes else ""
+    description = "\n".join(changes) + "\n" if changes else ""
     args.description_file.write_text(description, encoding="utf-8")
 
 
